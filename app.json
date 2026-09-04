@@ -1,0 +1,18 @@
+{
+  "expo": {
+    "name": "Finanzas en Pareja",
+    "slug": "finanzas-en-pareja",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.martincostas.finanzasenpareja"
+    },
+    "android": {
+      "package": "com.martincostas.finanzasenpareja"
+    },
+    "plugins": ["expo-notifications"]
+  }
+}
+
