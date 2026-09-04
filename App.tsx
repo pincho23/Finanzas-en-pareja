@@ -2,6 +2,7 @@ import { StatusBar } from "expo-status-bar";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect, useMemo, useState } from "react";
 import { isSupabaseConfigured, supabase } from "./src/lib/supabase";
+import { AuthGate } from "./src/auth/AuthGate";
 import {
   Alert,
   Modal,
@@ -55,7 +56,7 @@ const STORAGE_CATEGORIES = "finanzas:categories:v1";
 
 const money = (amount: number) => `${amount < 0 ? "−" : "+"} Bs ${Math.abs(amount).toFixed(2)}`;
 
-export default function App() {
+function FinanceApp() {
   const [activeTab, setActiveTab] = useState<"inicio" | "movimientos" | "categorias" | "ajustes">("inicio");
   const [period, setPeriod] = useState("Este mes");
   const [savedMovements, setSavedMovements] = useState<Movement[]>(movements);
@@ -277,6 +278,10 @@ export default function App() {
       </View>
     </SafeAreaView>
   );
+}
+
+export default function App() {
+  return <AuthGate><FinanceApp /></AuthGate>;
 }
 
 function MovementList({ items, onSelect }: { items: Movement[]; onSelect: (movement: Movement) => void }) {
