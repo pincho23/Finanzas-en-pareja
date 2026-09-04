@@ -1,7 +1,11 @@
 const CACHE = "finanzas-en-pareja-v1";
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(["/", "/manifest.json", "/icon.png"])));
+  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll([
+    "/Finanzas-en-pareja/",
+    "/Finanzas-en-pareja/manifest.json",
+    "/Finanzas-en-pareja/icon.png"
+  ])));
   self.skipWaiting();
 });
 
@@ -16,7 +20,7 @@ self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET" || new URL(event.request.url).origin !== self.location.origin) return;
 
   if (event.request.mode === "navigate") {
-    event.respondWith(fetch(event.request).catch(() => caches.match("/")));
+    event.respondWith(fetch(event.request).catch(() => caches.match("/Finanzas-en-pareja/")));
     return;
   }
 

@@ -28,6 +28,9 @@
       "startUrl": "/",
       "description": "Control compartido de ingresos y gastos del hogar"
     },
+    "experiments": {
+      "baseUrl": "/Finanzas-en-pareja"
+    },
     "plugins": [
       "expo-notifications"
     ],
