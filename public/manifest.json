@@ -1,0 +1,20 @@
+{
+  "name": "Finanzas en Pareja",
+  "short_name": "Finanzas",
+  "description": "Control compartido de ingresos y gastos del hogar",
+  "lang": "es",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#6D5EF7",
+  "background_color": "#F7F7FC",
+  "icons": [
+    {
+      "src": "/icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

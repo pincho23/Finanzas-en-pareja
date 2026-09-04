@@ -7,10 +7,26 @@
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.martincostas.finanzasenpareja"
+      "bundleIdentifier": "com.martincostas.finanzasenpareja",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "com.martincostas.finanzasenpareja"
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "favicon": "./public/icon.png",
+      "name": "Finanzas en Pareja",
+      "shortName": "Finanzas",
+      "themeColor": "#6D5EF7",
+      "backgroundColor": "#F7F7FC",
+      "display": "standalone",
+      "orientation": "portrait",
+      "startUrl": "/",
+      "description": "Control compartido de ingresos y gastos del hogar"
     },
     "plugins": [
       "expo-notifications"

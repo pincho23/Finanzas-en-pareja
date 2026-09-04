@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { isSupabaseConfigured, supabase } from "./src/lib/supabase";
 import { AuthGate, useHousehold } from "./src/auth/AuthGate";
 import { pushStatusText, registerPushNotifications, type PushRegistrationStatus } from "./src/notifications/pushNotifications";
+import { registerWebApp } from "./src/web/registerWebApp";
 import {
   Alert,
   AppState,
@@ -76,6 +77,10 @@ function FinanceApp() {
   const [connectionStatus, setConnectionStatus] = useState<"checking" | "connected" | "offline">("checking");
   const [remoteCategories, setRemoteCategories] = useState<RemoteCategory[]>([]);
   const [pushStatus, setPushStatus] = useState<PushRegistrationStatus>("checking");
+
+  useEffect(() => {
+    registerWebApp();
+  }, []);
 
   const mapTransaction = (row: any): Movement => {
     const channel = String(row.channel ?? "manual").toUpperCase();

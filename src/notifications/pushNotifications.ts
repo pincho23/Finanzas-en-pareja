@@ -11,6 +11,7 @@ export type PushRegistrationStatus =
   | "permission-denied"
   | "simulator"
   | "missing-project"
+  | "web-pending"
   | "error";
 
 if (Platform.OS !== "web") {
@@ -25,7 +26,8 @@ if (Platform.OS !== "web") {
 }
 
 export async function registerPushNotifications(householdId: string, userId: string): Promise<PushRegistrationStatus> {
-  if (!supabase || Platform.OS === "web") return "error";
+  if (Platform.OS === "web") return "web-pending";
+  if (!supabase) return "error";
   if (Constants.executionEnvironment === ExecutionEnvironment.StoreClient) return "expo-go";
   if (!Device.isDevice) return "simulator";
 
@@ -58,5 +60,6 @@ export const pushStatusText: Record<PushRegistrationStatus, string> = {
   "permission-denied": "Permiso desactivado en el iPhone.",
   simulator: "Las notificaciones requieren un teléfono físico.",
   "missing-project": "Falta vincular la app con Expo.",
+  "web-pending": "Aplicación web lista. Las notificaciones web se activarán en el siguiente paso.",
   error: "No se pudo registrar este dispositivo."
 };
