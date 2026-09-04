@@ -12,7 +12,14 @@
     "android": {
       "package": "com.martincostas.finanzasenpareja"
     },
-    "plugins": ["expo-notifications"]
+    "plugins": [
+      "expo-notifications"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "7e6e0b46-df30-4ef2-932d-3b6370ae744f"
+      }
+    },
+    "owner": "pincho239"
   }
 }
-

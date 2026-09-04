@@ -3,6 +3,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect, useMemo, useState } from "react";
 import { isSupabaseConfigured, supabase } from "./src/lib/supabase";
 import { AuthGate, useHousehold } from "./src/auth/AuthGate";
+import { pushStatusText, registerPushNotifications, type PushRegistrationStatus } from "./src/notifications/pushNotifications";
 import {
   Alert,
   AppState,
@@ -74,6 +75,7 @@ function FinanceApp() {
   const [editingMovement, setEditingMovement] = useState<Movement | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<"checking" | "connected" | "offline">("checking");
   const [remoteCategories, setRemoteCategories] = useState<RemoteCategory[]>([]);
+  const [pushStatus, setPushStatus] = useState<PushRegistrationStatus>("checking");
 
   const mapTransaction = (row: any): Movement => {
     const channel = String(row.channel ?? "manual").toUpperCase();
@@ -123,6 +125,11 @@ function FinanceApp() {
     });
     return () => subscription.remove();
   }, [household?.householdId]);
+
+  useEffect(() => {
+    if (!household) return;
+    registerPushNotifications(household.householdId, household.userId).then(setPushStatus);
+  }, [household?.householdId, household?.userId]);
 
   useEffect(() => {
     Promise.all([AsyncStorage.getItem(STORAGE_MOVEMENTS), AsyncStorage.getItem(STORAGE_CATEGORIES)])
@@ -352,9 +359,9 @@ function FinanceApp() {
                   <Text style={styles.settingState}>{household ? "Activo" : "Local"}</Text>
                 </View>
                 <View style={[styles.settingRow, { borderBottomWidth: 0 }]}>
-                  <View style={[styles.statusDot, styles.statusPending]} />
-                  <View style={{ flex: 1 }}><Text style={styles.settingTitle}>Correo bancario</Text><Text style={styles.settingHint}>Revisión automática cada 30 minutos.</Text></View>
-                  <Text style={styles.settingState}>Activo</Text>
+                  <View style={[styles.statusDot, pushStatus === "registered" ? styles.statusConnected : styles.statusPending]} />
+                  <View style={{ flex: 1 }}><Text style={styles.settingTitle}>Notificaciones</Text><Text style={styles.settingHint}>{pushStatusText[pushStatus]}</Text></View>
+                  <Text style={styles.settingState}>{pushStatus === "registered" ? "Activo" : "Preparando"}</Text>
                 </View>
               </View>
             </>
