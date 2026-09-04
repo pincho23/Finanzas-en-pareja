@@ -12,7 +12,7 @@ function processBankNotifications() {
 
   const processedLabel = getOrCreateLabel_('finanzas-procesado');
   const errorLabel = getOrCreateLabel_('finanzas-error');
-  const threads = GmailApp.search('from:(bmscsa@bmsc.com.bo) subject:(Notificaciones) newer_than:30d -label:finanzas-procesado', 0, 50);
+  const threads = GmailApp.search('from:(bmscsa@bmsc.com.bo) subject:(Notificaciones) newer_than:30d -label:finanzas-procesado -label:finanzas-error', 0, 50);
 
   threads.forEach(function(thread) {
     thread.getMessages().forEach(function(message) {
@@ -42,14 +42,13 @@ function processBankNotifications() {
   });
 }
 
-function installMinuteTrigger() {
+function installThirtyMinuteTrigger() {
   ScriptApp.getProjectTriggers().filter(function(trigger) {
     return trigger.getHandlerFunction() === 'processBankNotifications';
   }).forEach(function(trigger) { ScriptApp.deleteTrigger(trigger); });
-  ScriptApp.newTrigger('processBankNotifications').timeBased().everyMinutes(1).create();
+  ScriptApp.newTrigger('processBankNotifications').timeBased().everyMinutes(30).create();
 }
 
 function getOrCreateLabel_(name) {
   return GmailApp.getUserLabelByName(name) || GmailApp.createLabel(name);
 }
-
