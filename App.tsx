@@ -2,9 +2,10 @@ import { StatusBar } from "expo-status-bar";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect, useMemo, useState } from "react";
 import { isSupabaseConfigured, supabase } from "./src/lib/supabase";
-import { AuthGate } from "./src/auth/AuthGate";
+import { AuthGate, useHousehold } from "./src/auth/AuthGate";
 import {
   Alert,
+  AppState,
   Modal,
   SafeAreaView,
   ScrollView,
@@ -24,7 +25,11 @@ type Movement = {
   color: string;
   day: string;
   occurredAt: string;
+  categoryId?: string | null;
+  source?: "remote" | "local";
 };
+
+type RemoteCategory = { id: string; name: string };
 
 const movements: Movement[] = [
   { id: "1", title: "Farmacorp", detail: "Transferencia ACH · Hoy, 19:23", amount: -130.95, category: "Salud", color: "#6D5EF7", day: "03", occurredAt: "2026-09-03T19:23:12-04:00" },
@@ -57,6 +62,7 @@ const STORAGE_CATEGORIES = "finanzas:categories:v1";
 const money = (amount: number) => `${amount < 0 ? "−" : "+"} Bs ${Math.abs(amount).toFixed(2)}`;
 
 function FinanceApp() {
+  const household = useHousehold();
   const [activeTab, setActiveTab] = useState<"inicio" | "movimientos" | "categorias" | "ajustes">("inicio");
   const [period, setPeriod] = useState("Este mes");
   const [savedMovements, setSavedMovements] = useState<Movement[]>(movements);
@@ -67,29 +73,71 @@ function FinanceApp() {
   const [categoryModalOpen, setCategoryModalOpen] = useState(false);
   const [editingMovement, setEditingMovement] = useState<Movement | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<"checking" | "connected" | "offline">("checking");
+  const [remoteCategories, setRemoteCategories] = useState<RemoteCategory[]>([]);
+
+  const mapTransaction = (row: any): Movement => {
+    const channel = String(row.channel ?? "manual").toUpperCase();
+    const title = row.description || row.counterparty || (row.kind === "income" ? "Ingreso" : "Gasto");
+    return {
+      id: row.id,
+      title,
+      detail: `${channel} · ${new Date(row.occurred_at).toLocaleDateString("es-BO", { day: "numeric", month: "short" })}`,
+      amount: row.kind === "income" ? Number(row.amount) : -Number(row.amount),
+      category: row.categories?.name ?? null,
+      categoryId: row.category_id,
+      color: "#6D5EF7",
+      day: String(new Date(row.occurred_at).getDate()).padStart(2, "0"),
+      occurredAt: row.occurred_at,
+      source: "remote"
+    };
+  };
+
+  const loadRemoteData = async (showError = false) => {
+    if (!supabase || !household) return false;
+    const [categoryResult, transactionResult] = await Promise.all([
+      supabase.from("categories").select("id, name").eq("household_id", household.householdId).is("archived_at", null).order("name"),
+      supabase.from("transactions").select("id, category_id, kind, amount, occurred_at, description, counterparty, channel, categories(name)").eq("household_id", household.householdId).order("occurred_at", { ascending: false })
+    ]);
+    const error = categoryResult.error ?? transactionResult.error;
+    if (error) {
+      setConnectionStatus("offline");
+      if (showError) Alert.alert("Sin conexión", "No pudimos sincronizar los movimientos. Conservamos la información disponible en este teléfono.");
+      return false;
+    }
+    const categoryRows = (categoryResult.data ?? []) as RemoteCategory[];
+    setRemoteCategories(categoryRows);
+    setCategories(categoryRows.map((item) => item.name));
+    setSavedMovements((transactionResult.data ?? []).map(mapTransaction));
+    setConnectionStatus("connected");
+    return true;
+  };
 
   useEffect(() => {
-    if (!supabase) {
+    if (!supabase || !household) {
       setConnectionStatus("offline");
       return;
     }
-    supabase.from("categories").select("id").limit(1).then(({ error }) => setConnectionStatus(error ? "offline" : "connected"));
-  }, []);
+    loadRemoteData(true);
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") loadRemoteData();
+    });
+    return () => subscription.remove();
+  }, [household?.householdId]);
 
   useEffect(() => {
     Promise.all([AsyncStorage.getItem(STORAGE_MOVEMENTS), AsyncStorage.getItem(STORAGE_CATEGORIES)])
       .then(([storedMovements, storedCategories]) => {
-        if (storedMovements) {
+        if (storedMovements && (!supabase || !household)) {
           const parsed = JSON.parse(storedMovements) as Movement[];
           setSavedMovements(parsed.map((item) => ({ ...item, occurredAt: item.occurredAt ?? "2026-09-01T12:00:00-04:00" })));
         }
-        if (storedCategories) {
+        if (storedCategories && (!supabase || !household)) {
           const stored = JSON.parse(storedCategories) as string[];
           setCategories(Array.from(new Set([...stored, ...requestedCategories])));
         }
       })
       .catch(() => Alert.alert("Aviso", "No se pudieron recuperar los datos locales."));
-  }, []);
+  }, [household?.householdId]);
 
   useEffect(() => { AsyncStorage.setItem(STORAGE_MOVEMENTS, JSON.stringify(savedMovements)); }, [savedMovements]);
   useEffect(() => { AsyncStorage.setItem(STORAGE_CATEGORIES, JSON.stringify(categories)); }, [categories]);
@@ -128,17 +176,78 @@ function FinanceApp() {
     setMovementModalOpen(true);
   };
 
+  const saveMovement = async (movement: Movement) => {
+    if (!supabase || !household) {
+      setSavedMovements((current) => editingMovement ? current.map((item) => item.id === editingMovement.id ? movement : item) : [movement, ...current]);
+      setMovementModalOpen(false);
+      return;
+    }
+    const categoryId = movement.category ? remoteCategories.find((item) => item.name === movement.category)?.id ?? null : null;
+    const values = {
+      household_id: household.householdId,
+      category_id: categoryId,
+      kind: movement.amount > 0 ? "income" : "expense",
+      status: categoryId ? "classified" : "pending",
+      amount: Math.abs(movement.amount),
+      occurred_at: movement.occurredAt,
+      description: movement.title,
+      channel: editingMovement ? undefined : "manual",
+      source: editingMovement ? undefined : "manual",
+      created_by: editingMovement ? undefined : household.userId,
+      updated_at: new Date().toISOString()
+    };
+    const result = editingMovement
+      ? await supabase.from("transactions").update(values).eq("id", editingMovement.id).eq("household_id", household.householdId)
+      : await supabase.from("transactions").insert(values);
+    if (result.error) return Alert.alert("No se pudo guardar", result.error.message);
+    setMovementModalOpen(false);
+    await loadRemoteData();
+  };
+
   const deleteMovement = (movement: Movement) => Alert.alert(
     "Eliminar movimiento",
     `¿Quieres eliminar “${movement.title}”? Esta acción no se puede deshacer.`,
-    [{ text: "Cancelar", style: "cancel" }, { text: "Eliminar", style: "destructive", onPress: () => { setSavedMovements((current) => current.filter((item) => item.id !== movement.id)); setMovementModalOpen(false); } }]
+    [{ text: "Cancelar", style: "cancel" }, { text: "Eliminar", style: "destructive", onPress: async () => {
+      if (supabase && household && movement.source === "remote") {
+        const { error } = await supabase.from("transactions").delete().eq("id", movement.id).eq("household_id", household.householdId);
+        if (error) return Alert.alert("No se pudo eliminar", error.message);
+      }
+      setSavedMovements((current) => current.filter((item) => item.id !== movement.id));
+      setMovementModalOpen(false);
+    } }]
   );
 
   const deleteCategory = (name: string) => Alert.alert(
     "Eliminar categoría",
     `Los movimientos de “${name}” quedarán pendientes de clasificación.`,
-    [{ text: "Cancelar", style: "cancel" }, { text: "Eliminar", style: "destructive", onPress: () => { setCategories((current) => current.filter((item) => item !== name)); setSavedMovements((current) => current.map((item) => item.category === name ? { ...item, category: null } : item)); if (categoryFilter === name) setCategoryFilter(null); } }]
+    [{ text: "Cancelar", style: "cancel" }, { text: "Eliminar", style: "destructive", onPress: async () => {
+      const remote = remoteCategories.find((item) => item.name === name);
+      if (supabase && household && remote) {
+        const { error: movementError } = await supabase.from("transactions").update({ category_id: null, status: "pending", updated_at: new Date().toISOString() }).eq("household_id", household.householdId).eq("category_id", remote.id);
+        if (movementError) return Alert.alert("No se pudo actualizar", movementError.message);
+        const { error } = await supabase.from("categories").delete().eq("id", remote.id).eq("household_id", household.householdId);
+        if (error) return Alert.alert("No se pudo eliminar", error.message);
+      }
+      setRemoteCategories((current) => current.filter((item) => item.name !== name));
+      setCategories((current) => current.filter((item) => item !== name));
+      setSavedMovements((current) => current.map((item) => item.category === name ? { ...item, category: null, categoryId: null } : item));
+      if (categoryFilter === name) setCategoryFilter(null);
+    } }]
   );
+
+  const createCategory = async (name: string) => {
+    if (categories.some((item) => item.toLowerCase() === name.toLowerCase())) {
+      setCategoryModalOpen(false);
+      return;
+    }
+    if (supabase && household) {
+      const { data, error } = await supabase.from("categories").insert({ household_id: household.householdId, name }).select("id, name").single();
+      if (error) return Alert.alert("No se pudo crear", error.message);
+      setRemoteCategories((current) => [...current, data as RemoteCategory]);
+    }
+    setCategories((current) => [...current, name]);
+    setCategoryModalOpen(false);
+  };
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -147,8 +256,8 @@ function FinanceApp() {
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
           <View style={styles.header}>
             <View>
-              <Text style={styles.eyebrow}>NUESTRO HOGAR</Text>
-              <Text style={styles.greeting}>Hola, Martin</Text>
+              <Text style={styles.eyebrow}>{(household?.householdName ?? "NUESTRO HOGAR").toUpperCase()}</Text>
+              <Text style={styles.greeting}>Hola, {household?.displayName ?? "Martin"}</Text>
             </View>
             <TouchableOpacity style={styles.avatar}><Text style={styles.avatarText}>MC</Text></TouchableOpacity>
           </View>
@@ -239,13 +348,13 @@ function FinanceApp() {
                 </View>
                 <View style={styles.settingRow}>
                   <View style={[styles.statusDot, styles.statusPending]} />
-                  <View style={{ flex: 1 }}><Text style={styles.settingTitle}>Cuenta familiar</Text><Text style={styles.settingHint}>El siguiente paso será crear los dos accesos.</Text></View>
-                  <Text style={styles.settingState}>Pendiente</Text>
+                  <View style={{ flex: 1 }}><Text style={styles.settingTitle}>Cuenta familiar</Text><Text style={styles.settingHint}>{household?.householdName ?? "Disponible solo en este teléfono"}</Text></View>
+                  <Text style={styles.settingState}>{household ? "Activo" : "Local"}</Text>
                 </View>
                 <View style={[styles.settingRow, { borderBottomWidth: 0 }]}>
                   <View style={[styles.statusDot, styles.statusPending]} />
-                  <View style={{ flex: 1 }}><Text style={styles.settingTitle}>Correo bancario</Text><Text style={styles.settingHint}>Detector BMSC preparado, aún no activado.</Text></View>
-                  <Text style={styles.settingState}>Pendiente</Text>
+                  <View style={{ flex: 1 }}><Text style={styles.settingTitle}>Correo bancario</Text><Text style={styles.settingHint}>Revisión automática cada 30 minutos.</Text></View>
+                  <Text style={styles.settingState}>Activo</Text>
                 </View>
               </View>
             </>
@@ -265,16 +374,10 @@ function FinanceApp() {
           movement={editingMovement}
           categories={categories}
           onClose={() => setMovementModalOpen(false)}
-          onSave={(movement) => {
-            setSavedMovements((current) => editingMovement ? current.map((item) => item.id === editingMovement.id ? movement : item) : [movement, ...current]);
-            setMovementModalOpen(false);
-          }}
+          onSave={saveMovement}
           onDelete={editingMovement ? () => deleteMovement(editingMovement) : undefined}
         />
-        <CategoryEditor visible={categoryModalOpen} onClose={() => setCategoryModalOpen(false)} onSave={(name) => {
-          if (!categories.some((item) => item.toLowerCase() === name.toLowerCase())) setCategories((current) => [...current, name]);
-          setCategoryModalOpen(false);
-        }} />
+        <CategoryEditor visible={categoryModalOpen} onClose={() => setCategoryModalOpen(false)} onSave={createCategory} />
       </View>
     </SafeAreaView>
   );

@@ -1,9 +1,20 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { createContext, type ReactNode, useContext, useEffect, useState } from "react";
 import { Alert, ActivityIndicator, SafeAreaView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabase";
 
 type Household = { household_id: string; display_name: string; households: { name: string; invite_code: string } | null };
+
+type HouseholdSession = {
+  userId: string;
+  householdId: string;
+  displayName: string;
+  householdName: string;
+};
+
+const HouseholdContext = createContext<HouseholdSession | null>(null);
+
+export const useHousehold = () => useContext(HouseholdContext);
 
 export function AuthGate({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
@@ -35,7 +46,12 @@ export function AuthGate({ children }: { children: ReactNode }) {
   if (loading) return <SafeAreaView style={styles.center}><ActivityIndicator color="#6D5EF7" size="large" /><Text style={styles.loading}>Preparando tu hogar…</Text></SafeAreaView>;
   if (!session) return <AuthScreen />;
   if (!household) return <Onboarding onReady={() => loadHousehold(session.user.id)} onSignOut={() => supabase?.auth.signOut()} />;
-  return <>{children}</>;
+  return <HouseholdContext.Provider value={{
+    userId: session.user.id,
+    householdId: household.household_id,
+    displayName: household.display_name,
+    householdName: household.households?.name ?? "Nuestro hogar"
+  }}>{children}</HouseholdContext.Provider>;
 }
 
 function AuthScreen() {
