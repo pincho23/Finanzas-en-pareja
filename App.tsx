@@ -1,6 +1,7 @@
 import { StatusBar } from "expo-status-bar";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect, useMemo, useState } from "react";
+import { isSupabaseConfigured, supabase } from "./src/lib/supabase";
 import {
   Alert,
   Modal,
@@ -55,7 +56,7 @@ const STORAGE_CATEGORIES = "finanzas:categories:v1";
 const money = (amount: number) => `${amount < 0 ? "−" : "+"} Bs ${Math.abs(amount).toFixed(2)}`;
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<"inicio" | "movimientos" | "categorias">("inicio");
+  const [activeTab, setActiveTab] = useState<"inicio" | "movimientos" | "categorias" | "ajustes">("inicio");
   const [period, setPeriod] = useState("Este mes");
   const [savedMovements, setSavedMovements] = useState<Movement[]>(movements);
   const [categories, setCategories] = useState(initialCategories);
@@ -64,6 +65,15 @@ export default function App() {
   const [movementModalOpen, setMovementModalOpen] = useState(false);
   const [categoryModalOpen, setCategoryModalOpen] = useState(false);
   const [editingMovement, setEditingMovement] = useState<Movement | null>(null);
+  const [connectionStatus, setConnectionStatus] = useState<"checking" | "connected" | "offline">("checking");
+
+  useEffect(() => {
+    if (!supabase) {
+      setConnectionStatus("offline");
+      return;
+    }
+    supabase.from("categories").select("id").limit(1).then(({ error }) => setConnectionStatus(error ? "offline" : "connected"));
+  }, []);
 
   useEffect(() => {
     Promise.all([AsyncStorage.getItem(STORAGE_MOVEMENTS), AsyncStorage.getItem(STORAGE_CATEGORIES)])
@@ -215,6 +225,30 @@ export default function App() {
               </View>
             </>
           )}
+
+          {activeTab === "ajustes" && (
+            <>
+              <Text style={styles.pageTitle}>Ajustes</Text>
+              <Text style={styles.pageSubtitle}>Estado de la cuenta familiar y sus servicios.</Text>
+              <View style={styles.settingsCard}>
+                <View style={styles.settingRow}>
+                  <View style={[styles.statusDot, connectionStatus === "connected" ? styles.statusConnected : styles.statusOffline]} />
+                  <View style={{ flex: 1 }}><Text style={styles.settingTitle}>Supabase</Text><Text style={styles.settingHint}>{connectionStatus === "checking" ? "Comprobando conexión…" : connectionStatus === "connected" ? "Conectado y protegido" : isSupabaseConfigured ? "Sin conexión; usando modo local" : "Pendiente de configurar"}</Text></View>
+                  <Text style={styles.settingState}>{connectionStatus === "connected" ? "Activo" : "Local"}</Text>
+                </View>
+                <View style={styles.settingRow}>
+                  <View style={[styles.statusDot, styles.statusPending]} />
+                  <View style={{ flex: 1 }}><Text style={styles.settingTitle}>Cuenta familiar</Text><Text style={styles.settingHint}>El siguiente paso será crear los dos accesos.</Text></View>
+                  <Text style={styles.settingState}>Pendiente</Text>
+                </View>
+                <View style={[styles.settingRow, { borderBottomWidth: 0 }]}>
+                  <View style={[styles.statusDot, styles.statusPending]} />
+                  <View style={{ flex: 1 }}><Text style={styles.settingTitle}>Correo bancario</Text><Text style={styles.settingHint}>Detector BMSC preparado, aún no activado.</Text></View>
+                  <Text style={styles.settingState}>Pendiente</Text>
+                </View>
+              </View>
+            </>
+          )}
           <View style={{ height: 110 }} />
         </ScrollView>
 
@@ -223,7 +257,7 @@ export default function App() {
           <NavItem label="Movimientos" symbol="↕" active={activeTab === "movimientos"} onPress={() => setActiveTab("movimientos")} />
           <TouchableOpacity style={styles.addButton} onPress={() => openMovement()}><Text style={styles.addButtonText}>＋</Text></TouchableOpacity>
           <NavItem label="Categorías" symbol="◈" active={activeTab === "categorias"} onPress={() => setActiveTab("categorias")} />
-          <NavItem label="Ajustes" symbol="⚙" active={false} onPress={() => {}} />
+          <NavItem label="Ajustes" symbol="⚙" active={activeTab === "ajustes"} onPress={() => setActiveTab("ajustes")} />
         </View>
         <MovementEditor
           visible={movementModalOpen}
@@ -321,6 +355,7 @@ const styles = StyleSheet.create({
   movementCard: { backgroundColor: "white", borderRadius: 20, paddingHorizontal: 16 }, movementRow: { flexDirection: "row", alignItems: "center", paddingVertical: 16, gap: 12 }, movementBorder: { borderBottomWidth: 1, borderBottomColor: "#F0F1F5" }, dateBox: { width: 42, height: 48, borderRadius: 13, backgroundColor: "#F2F3F8", alignItems: "center", justifyContent: "center" }, dateDay: { fontSize: 16, fontWeight: "800", color: "#272E43" }, dateMonth: { fontSize: 8, letterSpacing: 0.8, color: "#9298A8", fontWeight: "700" }, movementTitle: { color: "#20273B", fontWeight: "700", fontSize: 14 }, movementDetail: { color: "#9298A8", fontSize: 10, marginTop: 2 }, tag: { alignSelf: "flex-start", marginTop: 6, backgroundColor: "#F0EDFF", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 }, tagText: { color: "#6D5EF7", fontSize: 9, fontWeight: "700" }, tagPending: { backgroundColor: "#FFF2D7" }, tagPendingText: { color: "#9B6811" }, amount: { color: "#D94E5D", fontSize: 13, fontWeight: "800" }, income: { color: "#15936C" },
   pageTitle: { fontSize: 30, fontWeight: "800", color: "#17203A", marginTop: 8 }, pageSubtitle: { color: "#7E8598", lineHeight: 20, marginTop: 6, marginBottom: 22 }, pendingBanner: { flexDirection: "row", backgroundColor: "#FFF5DE", padding: 14, borderRadius: 17, alignItems: "center", gap: 12, marginBottom: 16 }, pendingIcon: { width: 28, height: 28, borderRadius: 14, backgroundColor: "#E8A838", color: "white", textAlign: "center", lineHeight: 28, fontWeight: "900" }, pendingTitle: { color: "#6A4A12", fontWeight: "800" }, pendingText: { color: "#957240", fontSize: 11, marginTop: 2 }, chips: { flexDirection: "row", gap: 8, marginBottom: 14 }, categoryFilters: { gap: 8, paddingBottom: 14 }, chip: { backgroundColor: "#EAECF3", paddingHorizontal: 14, paddingVertical: 9, borderRadius: 16 }, chipActive: { backgroundColor: "#17203A", paddingHorizontal: 14, paddingVertical: 9, borderRadius: 16 }, chipText: { color: "#6C7385", fontWeight: "700", fontSize: 12 }, chipActiveText: { color: "white", fontWeight: "700", fontSize: 12 }, emptyText: { textAlign: "center", color: "#8A91A3", paddingVertical: 18 },
   primaryButton: { backgroundColor: "#6D5EF7", paddingVertical: 14, borderRadius: 16, alignItems: "center", marginBottom: 16 }, primaryButtonText: { color: "white", fontWeight: "800" }, manageCategoryRow: { flexDirection: "row", alignItems: "center", paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: "#F1F2F6" }, categoryIcon: { width: 38, height: 38, borderRadius: 12, alignItems: "center", justifyContent: "center", marginRight: 12 }, manageCategoryName: { flex: 1, fontWeight: "700", color: "#2D3448" }, chevron: { fontSize: 24, color: "#A3A8B5" },
+  settingsCard: { backgroundColor: "white", borderRadius: 20, paddingHorizontal: 18 }, settingRow: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 17, borderBottomWidth: 1, borderBottomColor: "#F0F1F5" }, statusDot: { width: 11, height: 11, borderRadius: 6 }, statusConnected: { backgroundColor: "#20A477" }, statusOffline: { backgroundColor: "#EF6A6A" }, statusPending: { backgroundColor: "#E8A838" }, settingTitle: { color: "#232A3E", fontWeight: "800" }, settingHint: { color: "#8A91A3", fontSize: 11, marginTop: 3 }, settingState: { color: "#6D5EF7", fontWeight: "700", fontSize: 11 },
   nav: { position: "absolute", bottom: 0, left: 0, right: 0, height: 84, backgroundColor: "white", borderTopWidth: 1, borderTopColor: "#ECEEF3", flexDirection: "row", alignItems: "center", justifyContent: "space-around", paddingBottom: 8 }, navItem: { alignItems: "center", width: 66 }, navSymbol: { color: "#9AA0AF", fontSize: 21 }, navLabel: { color: "#9AA0AF", fontSize: 9, marginTop: 4, fontWeight: "600" }, navActive: { color: "#6D5EF7" }, addButton: { width: 50, height: 50, borderRadius: 17, backgroundColor: "#6D5EF7", alignItems: "center", justifyContent: "center", marginTop: -25, shadowColor: "#6D5EF7", shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 6 } }, addButtonText: { color: "white", fontSize: 27, lineHeight: 29 },
   modalSafe: { flex: 1, backgroundColor: "#F6F7FB" }, modalContent: { padding: 20, paddingBottom: 50 }, modalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 30 }, modalTitle: { fontSize: 17, fontWeight: "800", color: "#17203A" }, modalCancel: { color: "#7C8497", fontWeight: "600" }, modalSave: { color: "#6D5EF7", fontWeight: "800" }, inputLabel: { color: "#777F92", fontSize: 10, letterSpacing: 1.1, fontWeight: "800", marginTop: 20, marginBottom: 8 }, kindRow: { flexDirection: "row", gap: 10 }, kindButton: { flex: 1, paddingVertical: 14, alignItems: "center", backgroundColor: "#E9EBF2", borderRadius: 14 }, kindButtonExpense: { backgroundColor: "#EF6A6A" }, kindButtonIncome: { backgroundColor: "#20A477" }, kindText: { color: "#697084", fontWeight: "800" }, kindTextActive: { color: "white" }, amountInput: { backgroundColor: "white", borderRadius: 18, padding: 18, fontSize: 30, fontWeight: "800", color: "#17203A" }, textInput: { backgroundColor: "white", borderRadius: 14, paddingHorizontal: 15, paddingVertical: 14, fontSize: 15, color: "#17203A", borderWidth: 1, borderColor: "#E7E9F0" }, categoryPicker: { flexDirection: "row", flexWrap: "wrap", gap: 8 }, pickerChip: { backgroundColor: "#E9EBF2", paddingHorizontal: 12, paddingVertical: 9, borderRadius: 14 }, pickerChipActive: { backgroundColor: "#6D5EF7", paddingHorizontal: 12, paddingVertical: 9, borderRadius: 14 }, pickerChipText: { color: "#626A7C", fontWeight: "700", fontSize: 12 }, pickerChipTextActive: { color: "white", fontWeight: "700", fontSize: 12 }, clearCategory: { color: "#D05A67", textAlign: "center", marginTop: 24, fontWeight: "700" }, deleteButton: { borderWidth: 1, borderColor: "#F1B7BD", borderRadius: 14, paddingVertical: 13, alignItems: "center", marginTop: 18 }, deleteButtonText: { color: "#C94C59", fontWeight: "800" },
   dialogBackdrop: { flex: 1, backgroundColor: "rgba(20,25,40,0.45)", justifyContent: "center", padding: 24 }, dialog: { backgroundColor: "#F8F9FC", borderRadius: 22, padding: 20 }, dialogTitle: { fontSize: 20, fontWeight: "800", color: "#17203A", marginBottom: 18 }, dialogActions: { flexDirection: "row", justifyContent: "flex-end", gap: 24, marginTop: 20 }
