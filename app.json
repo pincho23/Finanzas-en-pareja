@@ -1,0 +1,44 @@
+{
+  "expo": {
+    "name": "Finanzas en Pareja",
+    "slug": "finanzas-en-pareja",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.martincostas.finanzasenpareja",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "com.martincostas.finanzasenpareja"
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "favicon": "./public/icon.png",
+      "name": "Finanzas en Pareja",
+      "shortName": "Finanzas",
+      "themeColor": "#6D5EF7",
+      "backgroundColor": "#F7F7FC",
+      "display": "standalone",
+      "orientation": "portrait",
+      "startUrl": "/",
+      "description": "Control compartido de ingresos y gastos del hogar"
+    },
+    "experiments": {
+      "baseUrl": "/Finanzas-en-pareja"
+    },
+    "plugins": [
+      "expo-notifications"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "7e6e0b46-df30-4ef2-932d-3b6370ae744f"
+      }
+    },
+    "owner": "pincho239"
+  }
+}
