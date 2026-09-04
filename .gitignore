@@ -10,3 +10,4 @@ tmp/
 # Ejemplos bancarios y QR local: contienen datos o direcciones del entorno.
 Notificaciones*.pdf
 expo-qr.png
+supabase/.temp/

@@ -5,5 +5,6 @@
     "noUncheckedIndexedAccess": true,
     "types": ["node"],
     "allowImportingTsExtensions": true
-  }
+  },
+  "exclude": ["supabase/functions"]
 }

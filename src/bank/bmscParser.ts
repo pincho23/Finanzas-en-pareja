@@ -34,24 +34,26 @@ const parseBolivianDate = (date: string, time: string, meridiem: string) => {
   let hour = timeParts[0] ?? 0;
   const minute = timeParts[1] ?? 0;
   const second = timeParts[2] ?? 0;
-  if (meridiem.toLowerCase() === "p.m." && hour !== 12) hour += 12;
-  if (meridiem.toLowerCase() === "a.m." && hour === 12) hour = 0;
+  const normalizedMeridiem = meridiem.toLowerCase().replace(/\s/g, "");
+  if (normalizedMeridiem.startsWith("p") && hour !== 12) hour += 12;
+  if (normalizedMeridiem.startsWith("a") && hour === 12) hour = 0;
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${year}-${pad(month)}-${pad(day)}T${pad(hour)}:${pad(minute)}:${pad(second)}-04:00`;
 };
 
 export function parseBmscNotification(raw: string): ParsedBankTransaction {
   const text = compact(raw);
-  const amountMatch = text.match(/por un monto de Bs\s*([\d.,]*\d)/i);
-  const dateMatch = text.match(/realizada el\s+(\d{2}\/\d{2}\/\d{4})\s+a las\s+(\d{2}:\d{2}:\d{2})\s+(a\.m\.|p\.m\.)/i);
+  const amountMatch = text.match(/(?:por\s+un\s+)?monto(?:\s+de)?\s*(?:Bs\.?|BOB)?\s*([\d.,]*\d)/i);
+  const dateMatch = text.match(/(?:realizada?\s+el\s+)?(\d{2}\/\d{2}\/\d{4})(?:\s+a\s+las)?\s+(\d{1,2}:\d{2}(?::\d{2})?)\s*(a\.?\s*m\.?|p\.?\s*m\.)/i);
   if (!amountMatch || !dateMatch) {
     throw new Error("La notificacion BMSC no contiene importe o fecha reconocibles");
   }
 
-  const isCredit = /\bCr[eé]dito\s+Transferencia ACH\b/i.test(text);
-  const isDebitAch = /\bD[eé]bito\s+Transferencia ACH\b/i.test(text);
-  const isPos = /Compra en punto de venta\s*\(POS\)/i.test(text);
-  const isAtm = /Retiro en Cajero Autom[aá]tico\s*\(ATM\)/i.test(text);
+  const isAch = /Transferencia\s+ACH/i.test(text);
+  const isCredit = isAch && /(?:Cr[eé]dito|Abono).{0,40}Transferencia\s+ACH|Transferencia\s+ACH.{0,80}recibida/i.test(text);
+  const isDebitAch = isAch && !isCredit;
+  const isPos = /(?:Compra(?:\s+en\s+punto\s+de\s+venta)?|POS).*?(?:POS|comercio)/i.test(text);
+  const isAtm = /(?:Retiro|Cajero\s+Autom[aá]tico|ATM).*?(?:ATM|cajero)/i.test(text);
 
   let channel: TransactionChannel = "unknown";
   if (isCredit || isDebitAch) channel = "ach";
