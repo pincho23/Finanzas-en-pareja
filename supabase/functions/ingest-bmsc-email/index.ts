@@ -1,4 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
+// @deno-types="npm:@types/web-push@3.6.4"
+import webpush from "web-push";
 
 type Payload = {
   household_id: string;
@@ -95,8 +97,26 @@ Deno.serve(async (request) => {
     if (error) throw error;
 
     if (data?.id) {
-      const { data: tokens } = await client.from("push_tokens").select("token").eq("household_id", payload.household_id);
-      if (tokens?.length) await fetch("https://exp.host/--/api/v2/push/send", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(tokens.map(({ token }) => ({ to: token, sound: "default", title: parsed.kind === "income" ? "Nuevo ingreso" : "Nuevo gasto", body: `${parsed.kind === "income" ? "+" : "−"} Bs ${parsed.amount.toFixed(2)} · ${parsed.counterparty ?? parsed.channel.toUpperCase()}`, data: { transactionId: data.id } }))) });
+      const { data: tokens } = await client.from("push_tokens").select("id, token, platform").eq("household_id", payload.household_id);
+      const title = parsed.kind === "income" ? "Nuevo ingreso" : "Nuevo gasto";
+      const body = `${parsed.kind === "income" ? "+" : "−"} Bs ${parsed.amount.toFixed(2)} · ${parsed.counterparty ?? parsed.channel.toUpperCase()}`;
+      const nativeTokens = tokens?.filter(({ platform }) => platform !== "web") ?? [];
+      if (nativeTokens.length) await fetch("https://exp.host/--/api/v2/push/send", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(nativeTokens.map(({ token }) => ({ to: token, sound: "default", title, body, data: { transactionId: data.id } }))) });
+
+      const vapidPublicKey = Deno.env.get("VAPID_PUBLIC_KEY");
+      const vapidPrivateKey = Deno.env.get("VAPID_PRIVATE_KEY");
+      if (vapidPublicKey && vapidPrivateKey) {
+        webpush.setVapidDetails("https://pincho23.github.io/Finanzas-en-pareja/", vapidPublicKey, vapidPrivateKey);
+        await Promise.allSettled((tokens?.filter(({ platform }) => platform === "web") ?? []).map(async ({ id, token }) => {
+          try {
+            await webpush.sendNotification(JSON.parse(token), JSON.stringify({ title, body, transactionId: data.id }));
+          } catch (pushError) {
+            const statusCode = (pushError as { statusCode?: number }).statusCode;
+            if (statusCode === 404 || statusCode === 410) await client.from("push_tokens").delete().eq("id", id);
+            else throw pushError;
+          }
+        }));
+      }
     }
 
     return json({ ok: true, created: Boolean(data?.id) });

@@ -1,4 +1,4 @@
-const CACHE = "finanzas-en-pareja-v1";
+const CACHE = "finanzas-en-pareja-v2";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll([
@@ -31,4 +31,23 @@ self.addEventListener("fetch", (event) => {
       return response;
     }))
   );
+});
+
+self.addEventListener("push", (event) => {
+  const data = event.data?.json() ?? {};
+  event.waitUntil(self.registration.showNotification(data.title ?? "Finanzas en Pareja", {
+    body: data.body ?? "Hay un nuevo movimiento en la cuenta.",
+    icon: "/Finanzas-en-pareja/icon.png",
+    badge: "/Finanzas-en-pareja/icon.png",
+    tag: data.transactionId ?? "nuevo-movimiento",
+    data: { url: "/Finanzas-en-pareja/", transactionId: data.transactionId }
+  }));
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil(clients.matchAll({ type: "window", includeUncontrolled: true }).then((windows) => {
+    const existing = windows.find((client) => client.url.includes("/Finanzas-en-pareja/"));
+    return existing ? existing.focus() : clients.openWindow(event.notification.data?.url ?? "/Finanzas-en-pareja/");
+  }));
 });

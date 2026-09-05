@@ -33,8 +33,10 @@
   "devDependencies": {
     "@types/node": "^26.4.1",
     "@types/react": "^19.2.18",
+    "@types/web-push": "^3.6.4",
     "qrcode": "^1.5.4",
     "tsx": "^4.23.13",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "web-push": "^3.6.7"
   }
 }
