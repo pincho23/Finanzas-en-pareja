@@ -366,7 +366,7 @@ function FinanceApp() {
                 <View style={[styles.settingRow, { borderBottomWidth: 0 }]}>
                   <View style={[styles.statusDot, pushStatus === "registered" ? styles.statusConnected : styles.statusPending]} />
                   <View style={{ flex: 1 }}><Text style={styles.settingTitle}>Notificaciones</Text><Text style={styles.settingHint}>{pushStatusText[pushStatus]}</Text></View>
-                  <Text style={styles.settingState}>{pushStatus === "registered" ? "Activo" : "Preparando"}</Text>
+                  <Text style={styles.settingState}>{pushStatus === "registered" ? "Activo" : pushStatus === "web-ready" ? "Activar" : pushStatus === "checking" ? "Comprobando" : "Revisar"}</Text>
                 </View>
                 {pushStatus === "web-ready" && household && (
                   <TouchableOpacity style={styles.notificationButton} onPress={async () => {
