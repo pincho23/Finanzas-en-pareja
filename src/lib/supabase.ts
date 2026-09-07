@@ -15,7 +15,7 @@ export const supabase = isSupabaseConfigured
         ...(Platform.OS !== "web" ? { storage: AsyncStorage } : {}),
         autoRefreshToken: true,
         persistSession: true,
-        detectSessionInUrl: false
+        detectSessionInUrl: Platform.OS === "web"
       }
     })
   : null;
@@ -26,4 +26,3 @@ if (supabase && Platform.OS !== "web") {
     else supabase.auth.stopAutoRefresh();
   });
 }
-

@@ -73,6 +73,7 @@ function FinanceApp() {
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
   const [movementModalOpen, setMovementModalOpen] = useState(false);
   const [categoryModalOpen, setCategoryModalOpen] = useState(false);
+  const [profileModalOpen, setProfileModalOpen] = useState(false);
   const [editingMovement, setEditingMovement] = useState<Movement | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<"checking" | "connected" | "offline">("checking");
   const [remoteCategories, setRemoteCategories] = useState<RemoteCategory[]>([]);
@@ -182,6 +183,7 @@ function FinanceApp() {
     return Array.from(totalsByCategory.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([name, value], index) => ({ name, value, percentage: total ? Math.round(value / total * 100) : 0, color: palette[index] ?? "#64748B" }));
   }, [periodMovements]);
   const pendingCount = savedMovements.filter((item) => !item.category).length;
+  const initials = (household?.displayName ?? "MC").split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "MC";
 
   const openMovement = (movement: Movement | null = null) => {
     setEditingMovement(movement);
@@ -271,7 +273,7 @@ function FinanceApp() {
               <Text style={styles.eyebrow}>{(household?.householdName ?? "NUESTRO HOGAR").toUpperCase()}</Text>
               <Text style={styles.greeting}>Hola, {household?.displayName ?? "Martin"}</Text>
             </View>
-            <TouchableOpacity style={styles.avatar}><Text style={styles.avatarText}>MC</Text></TouchableOpacity>
+            <TouchableOpacity accessibilityLabel="Abrir perfil" onPress={() => setProfileModalOpen(true)} style={styles.avatar}><Text style={styles.avatarText}>{initials}</Text></TouchableOpacity>
           </View>
 
           {activeTab === "inicio" && (
@@ -396,6 +398,7 @@ function FinanceApp() {
           onDelete={editingMovement ? () => deleteMovement(editingMovement) : undefined}
         />
         <CategoryEditor visible={categoryModalOpen} onClose={() => setCategoryModalOpen(false)} onSave={createCategory} />
+        <ProfileModal visible={profileModalOpen} household={household} onClose={() => setProfileModalOpen(false)} />
       </View>
     </SafeAreaView>
   );
@@ -466,6 +469,27 @@ function CategoryEditor({ visible, onClose, onSave }: { visible: boolean; onClos
   return <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}><View style={styles.dialogBackdrop}><View style={styles.dialog}><Text style={styles.dialogTitle}>Nueva categoría</Text><TextInput autoFocus value={name} onChangeText={setName} placeholder="Nombre de la categoría" style={styles.textInput} /><View style={styles.dialogActions}><TouchableOpacity onPress={onClose}><Text style={styles.modalCancel}>Cancelar</Text></TouchableOpacity><TouchableOpacity onPress={() => name.trim() && onSave(name.trim())}><Text style={styles.modalSave}>Crear</Text></TouchableOpacity></View></View></View></Modal>;
 }
 
+function ProfileModal({ visible, household, onClose }: { visible: boolean; household: ReturnType<typeof useHousehold>; onClose: () => void }) {
+  return <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+    <SafeAreaView style={styles.profileSafe}>
+      <ScrollView contentContainerStyle={styles.profileContent}>
+        <View style={styles.profileHeader}><Text style={styles.profileTitle}>Mi perfil</Text><TouchableOpacity onPress={onClose}><Text style={styles.modalSave}>Cerrar</Text></TouchableOpacity></View>
+        <View style={styles.profileAvatar}><Text style={styles.profileAvatarText}>{(household?.displayName ?? "MC").split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "MC"}</Text></View>
+        <Text style={styles.profileName}>{household?.displayName ?? "Usuario"}</Text>
+        <Text style={styles.profileEmail}>{household?.email ?? ""}</Text>
+        <View style={styles.profileCard}>
+          <Text style={styles.profileLabel}>HOGAR</Text>
+          <Text style={styles.profileValue}>{household?.householdName ?? "Sin hogar"}</Text>
+          <View style={styles.profileDivider} />
+          <Text style={styles.profileLabel}>CÓDIGO DEL HOGAR</Text>
+          <Text selectable style={styles.inviteCode}>{household?.inviteCode || "No disponible"}</Text>
+          <Text style={styles.profileHelp}>Comparte este código únicamente con la persona que quieras incorporar al hogar.</Text>
+        </View>
+      </ScrollView>
+    </SafeAreaView>
+  </Modal>;
+}
+
 function NavItem({ label, symbol, active, onPress }: { label: string; symbol: string; active: boolean; onPress: () => void }) {
   return <TouchableOpacity style={styles.navItem} onPress={onPress}><Text style={[styles.navSymbol, active && styles.navActive]}>{symbol}</Text><Text style={[styles.navLabel, active && styles.navActive]}>{label}</Text></TouchableOpacity>;
 }
@@ -484,5 +508,6 @@ const styles = StyleSheet.create({
   settingsCard: { backgroundColor: "white", borderRadius: 20, paddingHorizontal: 18 }, settingRow: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 17, borderBottomWidth: 1, borderBottomColor: "#F0F1F5" }, statusDot: { width: 11, height: 11, borderRadius: 6 }, statusConnected: { backgroundColor: "#20A477" }, statusOffline: { backgroundColor: "#EF6A6A" }, statusPending: { backgroundColor: "#E8A838" }, settingTitle: { color: "#232A3E", fontWeight: "800" }, settingHint: { color: "#8A91A3", fontSize: 11, marginTop: 3 }, settingState: { color: "#6D5EF7", fontWeight: "700", fontSize: 11 }, notificationButton: { backgroundColor: "#6D5EF7", borderRadius: 14, paddingVertical: 13, alignItems: "center", marginBottom: 16 }, notificationButtonText: { color: "white", fontWeight: "800" },
   nav: { position: "absolute", bottom: 0, left: 0, right: 0, height: 84, backgroundColor: "white", borderTopWidth: 1, borderTopColor: "#ECEEF3", flexDirection: "row", alignItems: "center", justifyContent: "space-around", paddingBottom: 8 }, navItem: { alignItems: "center", width: 66 }, navSymbol: { color: "#9AA0AF", fontSize: 21 }, navLabel: { color: "#9AA0AF", fontSize: 9, marginTop: 4, fontWeight: "600" }, navActive: { color: "#6D5EF7" }, addButton: { width: 50, height: 50, borderRadius: 17, backgroundColor: "#6D5EF7", alignItems: "center", justifyContent: "center", marginTop: -25, shadowColor: "#6D5EF7", shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 6 } }, addButtonText: { color: "white", fontSize: 27, lineHeight: 29 },
   modalSafe: { flex: 1, backgroundColor: "#F6F7FB" }, modalContent: { padding: 20, paddingBottom: 50 }, modalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 30 }, modalTitle: { fontSize: 17, fontWeight: "800", color: "#17203A" }, modalCancel: { color: "#7C8497", fontWeight: "600" }, modalSave: { color: "#6D5EF7", fontWeight: "800" }, inputLabel: { color: "#777F92", fontSize: 10, letterSpacing: 1.1, fontWeight: "800", marginTop: 20, marginBottom: 8 }, kindRow: { flexDirection: "row", gap: 10 }, kindButton: { flex: 1, paddingVertical: 14, alignItems: "center", backgroundColor: "#E9EBF2", borderRadius: 14 }, kindButtonExpense: { backgroundColor: "#EF6A6A" }, kindButtonIncome: { backgroundColor: "#20A477" }, kindText: { color: "#697084", fontWeight: "800" }, kindTextActive: { color: "white" }, amountInput: { backgroundColor: "white", borderRadius: 18, padding: 18, fontSize: 30, fontWeight: "800", color: "#17203A" }, textInput: { backgroundColor: "white", borderRadius: 14, paddingHorizontal: 15, paddingVertical: 14, fontSize: 15, color: "#17203A", borderWidth: 1, borderColor: "#E7E9F0" }, categoryPicker: { flexDirection: "row", flexWrap: "wrap", gap: 8 }, pickerChip: { backgroundColor: "#E9EBF2", paddingHorizontal: 12, paddingVertical: 9, borderRadius: 14 }, pickerChipActive: { backgroundColor: "#6D5EF7", paddingHorizontal: 12, paddingVertical: 9, borderRadius: 14 }, pickerChipText: { color: "#626A7C", fontWeight: "700", fontSize: 12 }, pickerChipTextActive: { color: "white", fontWeight: "700", fontSize: 12 }, clearCategory: { color: "#D05A67", textAlign: "center", marginTop: 24, fontWeight: "700" }, deleteButton: { borderWidth: 1, borderColor: "#F1B7BD", borderRadius: 14, paddingVertical: 13, alignItems: "center", marginTop: 18 }, deleteButtonText: { color: "#C94C59", fontWeight: "800" },
-  dialogBackdrop: { flex: 1, backgroundColor: "rgba(20,25,40,0.45)", justifyContent: "center", padding: 24 }, dialog: { backgroundColor: "#F8F9FC", borderRadius: 22, padding: 20 }, dialogTitle: { fontSize: 20, fontWeight: "800", color: "#17203A", marginBottom: 18 }, dialogActions: { flexDirection: "row", justifyContent: "flex-end", gap: 24, marginTop: 20 }
+  dialogBackdrop: { flex: 1, backgroundColor: "rgba(20,25,40,0.45)", justifyContent: "center", padding: 24 }, dialog: { backgroundColor: "#F8F9FC", borderRadius: 22, padding: 20 }, dialogTitle: { fontSize: 20, fontWeight: "800", color: "#17203A", marginBottom: 18 }, dialogActions: { flexDirection: "row", justifyContent: "flex-end", gap: 24, marginTop: 20 },
+  profileSafe: { flex: 1, backgroundColor: "#F6F7FB" }, profileContent: { padding: 24, paddingBottom: 50 }, profileHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" }, profileTitle: { fontSize: 28, fontWeight: "900", color: "#17203A" }, profileAvatar: { alignSelf: "center", width: 88, height: 88, borderRadius: 28, backgroundColor: "#EAE7FF", alignItems: "center", justifyContent: "center", marginTop: 34 }, profileAvatarText: { color: "#5949E8", fontSize: 28, fontWeight: "900" }, profileName: { textAlign: "center", color: "#17203A", fontSize: 22, fontWeight: "900", marginTop: 16 }, profileEmail: { textAlign: "center", color: "#7E8598", marginTop: 5 }, profileCard: { backgroundColor: "white", borderRadius: 22, padding: 20, marginTop: 30 }, profileLabel: { color: "#8A91A3", fontSize: 10, letterSpacing: 1.2, fontWeight: "800" }, profileValue: { color: "#232A3E", fontSize: 18, fontWeight: "800", marginTop: 7 }, profileDivider: { height: 1, backgroundColor: "#ECEEF3", marginVertical: 20 }, inviteCode: { color: "#6D5EF7", fontSize: 27, letterSpacing: 4, fontWeight: "900", marginTop: 8 }, profileHelp: { color: "#8A91A3", fontSize: 12, lineHeight: 18, marginTop: 12 }
 });
