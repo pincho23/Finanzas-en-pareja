@@ -84,6 +84,7 @@ function FinanceApp() {
   const [gasModalOpen, setGasModalOpen] = useState(false);
   const [editingGasChange, setEditingGasChange] = useState<GasChange | null>(null);
   const [gasSyncUnavailable, setGasSyncUnavailable] = useState(false);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
 
   useEffect(() => {
     registerWebApp();
@@ -482,12 +483,15 @@ function FinanceApp() {
         </ScrollView>
 
         <View style={styles.nav}>
-          <NavItem label="Inicio" symbol="⌂" active={activeTab === "inicio"} onPress={() => setActiveTab("inicio")} />
-          <NavItem label="Movimientos" symbol="↕" active={activeTab === "movimientos"} onPress={() => setActiveTab("movimientos")} />
-          <TouchableOpacity style={styles.addButton} onPress={() => openMovement()}><Text style={styles.addButtonText}>＋</Text></TouchableOpacity>
-          <NavItem label="Garrafa" symbol="◉" active={activeTab === "garrafa"} onPress={() => setActiveTab("garrafa")} />
-          <NavItem label="Categorías" symbol="◈" active={activeTab === "categorias"} onPress={() => setActiveTab("categorias")} />
-          <NavItem label="Ajustes" symbol="⚙" active={activeTab === "ajustes"} onPress={() => setActiveTab("ajustes")} />
+          <View style={styles.navSide}>
+            <NavItem label="Inicio" symbol="⌂" active={activeTab === "inicio"} onPress={() => setActiveTab("inicio")} />
+            <NavItem label="Movimientos" symbol="↕" active={activeTab === "movimientos"} onPress={() => setActiveTab("movimientos")} />
+          </View>
+          <TouchableOpacity accessibilityLabel="Agregar movimiento" style={styles.addButton} onPress={() => openMovement()}><Text style={styles.addButtonText}>＋</Text></TouchableOpacity>
+          <View style={styles.navSide}>
+            <NavItem label="Garrafa" symbol="◉" active={activeTab === "garrafa"} onPress={() => setActiveTab("garrafa")} />
+            <NavItem label="Más" symbol="•••" active={activeTab === "categorias" || activeTab === "ajustes"} onPress={() => setMoreMenuOpen(true)} />
+          </View>
         </View>
         <MovementEditor
           visible={movementModalOpen}
@@ -504,6 +508,12 @@ function FinanceApp() {
           onClose={() => setGasModalOpen(false)}
           onSave={saveGasChange}
           onDelete={editingGasChange ? () => deleteGasChange(editingGasChange) : undefined}
+        />
+        <MoreMenu
+          visible={moreMenuOpen}
+          activeTab={activeTab}
+          onClose={() => setMoreMenuOpen(false)}
+          onSelect={(tab) => { setActiveTab(tab); setMoreMenuOpen(false); }}
         />
         <ProfileModal visible={profileModalOpen} household={household} onClose={() => setProfileModalOpen(false)} />
       </View>
@@ -639,7 +649,29 @@ function ProfileModal({ visible, household, onClose }: { visible: boolean; house
 }
 
 function NavItem({ label, symbol, active, onPress }: { label: string; symbol: string; active: boolean; onPress: () => void }) {
-  return <TouchableOpacity style={styles.navItem} onPress={onPress}><Text style={[styles.navSymbol, active && styles.navActive]}>{symbol}</Text><Text style={[styles.navLabel, active && styles.navActive]}>{label}</Text></TouchableOpacity>;
+  return <TouchableOpacity accessibilityRole="button" accessibilityLabel={label} style={styles.navItem} onPress={onPress}><Text style={[styles.navSymbol, active && styles.navActive]}>{symbol}</Text><Text style={[styles.navLabel, active && styles.navActive]}>{label}</Text></TouchableOpacity>;
+}
+
+function MoreMenu({ visible, activeTab, onClose, onSelect }: { visible: boolean; activeTab: "inicio" | "movimientos" | "garrafa" | "categorias" | "ajustes"; onClose: () => void; onSelect: (tab: "categorias" | "ajustes") => void }) {
+  return <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <View style={styles.moreBackdrop}>
+      <TouchableOpacity accessibilityLabel="Cerrar menú" style={styles.moreDismissArea} onPress={onClose} />
+      <View style={styles.moreSheet}>
+        <View style={styles.moreHandle} />
+        <Text style={styles.moreTitle}>Más opciones</Text>
+        <TouchableOpacity style={[styles.moreOption, activeTab === "categorias" && styles.moreOptionActive]} onPress={() => onSelect("categorias")}>
+          <View style={styles.moreOptionIcon}><Text style={styles.moreOptionSymbol}>◈</Text></View>
+          <View style={{ flex: 1 }}><Text style={styles.moreOptionTitle}>Categorías</Text><Text style={styles.moreOptionHint}>Organizar ingresos y gastos</Text></View>
+          <Text style={styles.moreChevron}>›</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.moreOption, activeTab === "ajustes" && styles.moreOptionActive]} onPress={() => onSelect("ajustes")}>
+          <View style={styles.moreOptionIcon}><Text style={styles.moreOptionSymbol}>⚙</Text></View>
+          <View style={{ flex: 1 }}><Text style={styles.moreOptionTitle}>Ajustes</Text><Text style={styles.moreOptionHint}>Conexión, hogar y notificaciones</Text></View>
+          <Text style={styles.moreChevron}>›</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  </Modal>;
 }
 
 const styles = StyleSheet.create({
@@ -654,11 +686,12 @@ const styles = StyleSheet.create({
   pageTitle: { fontSize: 30, fontWeight: "800", color: "#17203A", marginTop: 8 }, pageSubtitle: { color: "#7E8598", lineHeight: 20, marginTop: 6, marginBottom: 22 }, pendingBanner: { flexDirection: "row", backgroundColor: "#FFF5DE", padding: 14, borderRadius: 17, alignItems: "center", gap: 12, marginBottom: 16 }, pendingIcon: { width: 28, height: 28, borderRadius: 14, backgroundColor: "#E8A838", color: "white", textAlign: "center", lineHeight: 28, fontWeight: "900" }, pendingTitle: { color: "#6A4A12", fontWeight: "800" }, pendingText: { color: "#957240", fontSize: 11, marginTop: 2 }, chips: { flexDirection: "row", gap: 8, marginBottom: 14 }, categoryFilters: { gap: 8, paddingBottom: 14 }, chip: { backgroundColor: "#EAECF3", paddingHorizontal: 14, paddingVertical: 9, borderRadius: 16 }, chipActive: { backgroundColor: "#17203A", paddingHorizontal: 14, paddingVertical: 9, borderRadius: 16 }, chipText: { color: "#6C7385", fontWeight: "700", fontSize: 12 }, chipActiveText: { color: "white", fontWeight: "700", fontSize: 12 }, emptyText: { textAlign: "center", color: "#8A91A3", paddingVertical: 18 },
   primaryButton: { backgroundColor: "#6D5EF7", paddingVertical: 14, borderRadius: 16, alignItems: "center", marginBottom: 16 }, primaryButtonText: { color: "white", fontWeight: "800" }, manageCategoryRow: { flexDirection: "row", alignItems: "center", paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: "#F1F2F6" }, categoryIcon: { width: 38, height: 38, borderRadius: 12, alignItems: "center", justifyContent: "center", marginRight: 12 }, manageCategoryName: { flex: 1, fontWeight: "700", color: "#2D3448" }, chevron: { fontSize: 24, color: "#A3A8B5" },
   settingsCard: { backgroundColor: "white", borderRadius: 20, paddingHorizontal: 18 }, settingRow: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 17, borderBottomWidth: 1, borderBottomColor: "#F0F1F5" }, statusDot: { width: 11, height: 11, borderRadius: 6 }, statusConnected: { backgroundColor: "#20A477" }, statusOffline: { backgroundColor: "#EF6A6A" }, statusPending: { backgroundColor: "#E8A838" }, settingTitle: { color: "#232A3E", fontWeight: "800" }, settingHint: { color: "#8A91A3", fontSize: 11, marginTop: 3 }, settingState: { color: "#6D5EF7", fontWeight: "700", fontSize: 11 }, notificationButton: { backgroundColor: "#6D5EF7", borderRadius: 14, paddingVertical: 13, alignItems: "center", marginBottom: 16 }, notificationButtonText: { color: "white", fontWeight: "800" },
-  nav: { position: "absolute", bottom: 0, left: 0, right: 0, height: 84, backgroundColor: "white", borderTopWidth: 1, borderTopColor: "#ECEEF3", flexDirection: "row", alignItems: "center", justifyContent: "space-around", paddingBottom: 8 }, navItem: { alignItems: "center", flex: 1, minWidth: 48 }, navSymbol: { color: "#9AA0AF", fontSize: 20 }, navLabel: { color: "#9AA0AF", fontSize: 8, marginTop: 4, fontWeight: "600" }, navActive: { color: "#6D5EF7" }, addButton: { width: 46, height: 46, borderRadius: 16, backgroundColor: "#6D5EF7", alignItems: "center", justifyContent: "center", marginTop: -25, shadowColor: "#6D5EF7", shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 6 } }, addButtonText: { color: "white", fontSize: 25, lineHeight: 27 },
+  nav: { position: "absolute", bottom: 0, left: 0, right: 0, height: 84, backgroundColor: "white", borderTopWidth: 1, borderTopColor: "#ECEEF3", flexDirection: "row", alignItems: "center", paddingHorizontal: 6, paddingBottom: 8 }, navSide: { flex: 1, flexDirection: "row", alignItems: "center" }, navItem: { alignItems: "center", justifyContent: "center", flex: 1, minWidth: 58 }, navSymbol: { color: "#9AA0AF", fontSize: 20, height: 24 }, navLabel: { color: "#9AA0AF", fontSize: 9, marginTop: 3, fontWeight: "600" }, navActive: { color: "#6D5EF7" }, addButton: { width: 54, height: 54, borderRadius: 18, backgroundColor: "#6D5EF7", alignItems: "center", justifyContent: "center", marginTop: -28, marginHorizontal: 4, shadowColor: "#6D5EF7", shadowOpacity: 0.32, shadowRadius: 12, shadowOffset: { width: 0, height: 7 }, elevation: 7 }, addButtonText: { color: "white", fontSize: 28, lineHeight: 30 },
   modalSafe: { flex: 1, backgroundColor: "#F6F7FB" }, modalContent: { padding: 20, paddingBottom: 50 }, modalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 30 }, modalTitle: { fontSize: 17, fontWeight: "800", color: "#17203A" }, modalCancel: { color: "#7C8497", fontWeight: "600" }, modalSave: { color: "#6D5EF7", fontWeight: "800" }, inputLabel: { color: "#777F92", fontSize: 10, letterSpacing: 1.1, fontWeight: "800", marginTop: 20, marginBottom: 8 }, kindRow: { flexDirection: "row", gap: 10 }, kindButton: { flex: 1, paddingVertical: 14, alignItems: "center", backgroundColor: "#E9EBF2", borderRadius: 14 }, kindButtonExpense: { backgroundColor: "#EF6A6A" }, kindButtonIncome: { backgroundColor: "#20A477" }, kindText: { color: "#697084", fontWeight: "800" }, kindTextActive: { color: "white" }, amountInput: { backgroundColor: "white", borderRadius: 18, padding: 18, fontSize: 30, fontWeight: "800", color: "#17203A" }, textInput: { backgroundColor: "white", borderRadius: 14, paddingHorizontal: 15, paddingVertical: 14, fontSize: 15, color: "#17203A", borderWidth: 1, borderColor: "#E7E9F0" }, categoryPicker: { flexDirection: "row", flexWrap: "wrap", gap: 8 }, pickerChip: { backgroundColor: "#E9EBF2", paddingHorizontal: 12, paddingVertical: 9, borderRadius: 14 }, pickerChipActive: { backgroundColor: "#6D5EF7", paddingHorizontal: 12, paddingVertical: 9, borderRadius: 14 }, pickerChipText: { color: "#626A7C", fontWeight: "700", fontSize: 12 }, pickerChipTextActive: { color: "white", fontWeight: "700", fontSize: 12 }, clearCategory: { color: "#D05A67", textAlign: "center", marginTop: 24, fontWeight: "700" }, deleteButton: { borderWidth: 1, borderColor: "#F1B7BD", borderRadius: 14, paddingVertical: 13, alignItems: "center", marginTop: 18 }, deleteButtonText: { color: "#C94C59", fontWeight: "800" },
   dialogBackdrop: { flex: 1, backgroundColor: "rgba(20,25,40,0.45)", justifyContent: "center", padding: 24 }, dialog: { backgroundColor: "#F8F9FC", borderRadius: 22, padding: 20 }, dialogTitle: { fontSize: 20, fontWeight: "800", color: "#17203A", marginBottom: 18 }, dialogActions: { flexDirection: "row", justifyContent: "flex-end", gap: 24, marginTop: 20 },
   profileSafe: { flex: 1, backgroundColor: "#F6F7FB" }, profileContent: { padding: 24, paddingBottom: 50 }, profileHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" }, profileTitle: { fontSize: 28, fontWeight: "900", color: "#17203A" }, profileAvatar: { alignSelf: "center", width: 88, height: 88, borderRadius: 28, backgroundColor: "#EAE7FF", alignItems: "center", justifyContent: "center", marginTop: 34 }, profileAvatarText: { color: "#5949E8", fontSize: 28, fontWeight: "900" }, profileName: { textAlign: "center", color: "#17203A", fontSize: 22, fontWeight: "900", marginTop: 16 }, profileEmail: { textAlign: "center", color: "#7E8598", marginTop: 5 }, profileCard: { backgroundColor: "white", borderRadius: 22, padding: 20, marginTop: 30 }, profileLabel: { color: "#8A91A3", fontSize: 10, letterSpacing: 1.2, fontWeight: "800" }, profileValue: { color: "#232A3E", fontSize: 18, fontWeight: "800", marginTop: 7 }, profileDivider: { height: 1, backgroundColor: "#ECEEF3", marginVertical: 20 }, inviteCode: { color: "#6D5EF7", fontSize: 27, letterSpacing: 4, fontWeight: "900", marginTop: 8 }, profileHelp: { color: "#8A91A3", fontSize: 12, lineHeight: 18, marginTop: 12 },
   gasForecastCard: { backgroundColor: "#17203A", borderRadius: 24, padding: 22, marginBottom: 16 }, gasForecastEyebrow: { color: "#A9B1C7", fontSize: 10, letterSpacing: 1.2, fontWeight: "900" }, gasForecastDate: { color: "white", fontSize: 25, fontWeight: "900", marginTop: 9 }, gasForecastCaption: { color: "#C8CDDA", fontSize: 12, lineHeight: 18, marginTop: 8 },
   gasHistoryCard: { backgroundColor: "white", borderRadius: 20, paddingHorizontal: 16 }, gasHistoryRow: { flexDirection: "row", alignItems: "center", paddingVertical: 15, gap: 11 }, gasIcon: { width: 38, height: 38, borderRadius: 13, alignItems: "center", justifyContent: "center", backgroundColor: "#DFF6EE" }, gasIconPlanned: { backgroundColor: "#EEEAFE" }, gasIconText: { color: "#4E46B9", fontWeight: "900" }, gasHistoryDate: { color: "#232A3E", fontWeight: "800", fontSize: 14 }, gasHistoryNote: { color: "#8A91A3", fontSize: 11, marginTop: 3 }, gasKindTag: { backgroundColor: "#DFF6EE", borderRadius: 9, paddingHorizontal: 8, paddingVertical: 5 }, gasKindTagPlanned: { backgroundColor: "#EEEAFE" }, gasKindText: { color: "#167B5C", fontSize: 9, fontWeight: "800" }, gasKindTextPlanned: { color: "#5B50CA" },
-  gasEmptyCard: { backgroundColor: "white", borderRadius: 20, padding: 24, alignItems: "center" }, gasEmptyIcon: { fontSize: 30, color: "#6D5EF7" }, gasEmptyTitle: { color: "#232A3E", fontSize: 17, fontWeight: "900", marginTop: 10 }, gasWarning: { backgroundColor: "#FFF5DE", borderRadius: 16, padding: 14, marginBottom: 14 }, gasWarningTitle: { color: "#6A4A12", fontWeight: "900" }, gasWarningText: { color: "#957240", fontSize: 11, lineHeight: 17, marginTop: 4 }, gasKindButtonActual: { backgroundColor: "#20A477" }, gasKindButtonPlanned: { backgroundColor: "#6D5EF7" }, gasEditorHelp: { color: "#7E8598", fontSize: 12, lineHeight: 18, marginTop: 12 }
+  gasEmptyCard: { backgroundColor: "white", borderRadius: 20, padding: 24, alignItems: "center" }, gasEmptyIcon: { fontSize: 30, color: "#6D5EF7" }, gasEmptyTitle: { color: "#232A3E", fontSize: 17, fontWeight: "900", marginTop: 10 }, gasWarning: { backgroundColor: "#FFF5DE", borderRadius: 16, padding: 14, marginBottom: 14 }, gasWarningTitle: { color: "#6A4A12", fontWeight: "900" }, gasWarningText: { color: "#957240", fontSize: 11, lineHeight: 17, marginTop: 4 }, gasKindButtonActual: { backgroundColor: "#20A477" }, gasKindButtonPlanned: { backgroundColor: "#6D5EF7" }, gasEditorHelp: { color: "#7E8598", fontSize: 12, lineHeight: 18, marginTop: 12 },
+  moreBackdrop: { flex: 1, backgroundColor: "rgba(20,25,40,0.38)", justifyContent: "flex-end" }, moreDismissArea: { flex: 1 }, moreSheet: { backgroundColor: "#F8F9FC", borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 20, paddingTop: 10, paddingBottom: 34 }, moreHandle: { width: 42, height: 5, borderRadius: 3, backgroundColor: "#D5D8E1", alignSelf: "center", marginBottom: 18 }, moreTitle: { color: "#17203A", fontSize: 21, fontWeight: "900", marginBottom: 14 }, moreOption: { backgroundColor: "white", borderRadius: 18, padding: 14, flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 10, borderWidth: 1, borderColor: "#EFF0F4" }, moreOptionActive: { borderColor: "#C9C2FF", backgroundColor: "#F3F1FF" }, moreOptionIcon: { width: 42, height: 42, borderRadius: 14, backgroundColor: "#EAE7FF", alignItems: "center", justifyContent: "center" }, moreOptionSymbol: { color: "#5949E8", fontSize: 19, fontWeight: "900" }, moreOptionTitle: { color: "#232A3E", fontWeight: "900", fontSize: 15 }, moreOptionHint: { color: "#8A91A3", fontSize: 11, marginTop: 3 }, moreChevron: { color: "#A3A8B5", fontSize: 25 }
 });
