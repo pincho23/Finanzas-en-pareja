@@ -12,6 +12,7 @@
     "build:web": "expo export --platform web --output-dir dist && node scripts/prepare-web-export.cjs",
     "typecheck": "tsc --noEmit",
     "test:parser": "node --experimental-strip-types src/bank/bmscParser.test.ts",
+    "test:gas": "node --experimental-strip-types src/gas/gasForecast.test.ts",
     "test:supabase": "node --experimental-strip-types src/lib/supabase.test.ts"
   },
   "dependencies": {

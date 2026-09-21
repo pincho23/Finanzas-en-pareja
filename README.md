@@ -8,6 +8,7 @@ Aplicacion movil privada para registrar, clasificar y analizar los movimientos d
 - Parser probado para notificaciones BMSC de ACH debito, ACH credito, POS y ATM.
 - Modelo Supabase multiusuario con seguridad por hogar.
 - Datos bancarios sensibles reducidos a los ultimos cuatro digitos.
+- Registro independiente de cambios de garrafa, fechas programadas y pronostico basado en el promedio de los ultimos intervalos reales.
 
 ## Desarrollo local
 
@@ -15,6 +16,11 @@ Aplicacion movil privada para registrar, clasificar y analizar los movimientos d
 2. Copiar `.env.example` a `.env` y completar las credenciales publicas de Supabase.
 3. Ejecutar `npm start` y abrir el codigo QR con Expo Go.
 4. Ejecutar `npm run test:parser` para validar los formatos bancarios.
+5. Ejecutar `npm run test:gas` para validar el calculo del pronostico de la garrafa.
+
+## Migraciones de Supabase
+
+Las migraciones de `supabase/migrations` se aplican en orden. La migracion `003_gas_cylinder_changes.sql` crea el historial compartido de la garrafa y sus reglas de acceso por hogar. Las fechas programadas se muestran en la planificacion, pero solamente los cambios realizados intervienen en el pronostico.
 
 ### Aplicacion web instalable
 
