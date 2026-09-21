@@ -5,6 +5,7 @@ import { isSupabaseConfigured, supabase } from "./src/lib/supabase";
 import { AuthGate, useHousehold } from "./src/auth/AuthGate";
 import { enableWebPushNotifications, pushStatusText, registerPushNotifications, type PushRegistrationStatus } from "./src/notifications/pushNotifications";
 import { registerWebApp } from "./src/web/registerWebApp";
+import { calculateGasForecast, formatGasDate, normalizeDateInput, toIsoDate, type GasChange, type GasChangeKind } from "./src/gas/gasForecast";
 import {
   Alert,
   AppState,
@@ -60,12 +61,13 @@ const initialCategories = [
 
 const STORAGE_MOVEMENTS = "finanzas:movements:v1";
 const STORAGE_CATEGORIES = "finanzas:categories:v1";
+const STORAGE_GAS_CHANGES = "finanzas:gas-changes:v1";
 
 const money = (amount: number) => `${amount < 0 ? "−" : "+"} Bs ${Math.abs(amount).toFixed(2)}`;
 
 function FinanceApp() {
   const household = useHousehold();
-  const [activeTab, setActiveTab] = useState<"inicio" | "movimientos" | "categorias" | "ajustes">("inicio");
+  const [activeTab, setActiveTab] = useState<"inicio" | "movimientos" | "garrafa" | "categorias" | "ajustes">("inicio");
   const [period, setPeriod] = useState("Este mes");
   const [savedMovements, setSavedMovements] = useState<Movement[]>(movements);
   const [categories, setCategories] = useState(initialCategories);
@@ -78,6 +80,10 @@ function FinanceApp() {
   const [connectionStatus, setConnectionStatus] = useState<"checking" | "connected" | "offline">("checking");
   const [remoteCategories, setRemoteCategories] = useState<RemoteCategory[]>([]);
   const [pushStatus, setPushStatus] = useState<PushRegistrationStatus>("checking");
+  const [gasChanges, setGasChanges] = useState<GasChange[]>([]);
+  const [gasModalOpen, setGasModalOpen] = useState(false);
+  const [editingGasChange, setEditingGasChange] = useState<GasChange | null>(null);
+  const [gasSyncUnavailable, setGasSyncUnavailable] = useState(false);
 
   useEffect(() => {
     registerWebApp();
@@ -102,9 +108,10 @@ function FinanceApp() {
 
   const loadRemoteData = async (showError = false) => {
     if (!supabase || !household) return false;
-    const [categoryResult, transactionResult] = await Promise.all([
+    const [categoryResult, transactionResult, gasResult] = await Promise.all([
       supabase.from("categories").select("id, name").eq("household_id", household.householdId).is("archived_at", null).order("name"),
-      supabase.from("transactions").select("id, category_id, kind, amount, occurred_at, description, counterparty, channel, categories(name)").eq("household_id", household.householdId).order("occurred_at", { ascending: false })
+      supabase.from("transactions").select("id, category_id, kind, amount, occurred_at, description, counterparty, channel, categories(name)").eq("household_id", household.householdId).order("occurred_at", { ascending: false }),
+      supabase.from("gas_cylinder_changes").select("id, change_date, kind, notes").eq("household_id", household.householdId).order("change_date", { ascending: false })
     ]);
     const error = categoryResult.error ?? transactionResult.error;
     if (error) {
@@ -116,6 +123,17 @@ function FinanceApp() {
     setRemoteCategories(categoryRows);
     setCategories(categoryRows.map((item) => item.name));
     setSavedMovements((transactionResult.data ?? []).map(mapTransaction));
+    if (gasResult.error) setGasSyncUnavailable(true);
+    else {
+      setGasSyncUnavailable(false);
+      setGasChanges((gasResult.data ?? []).map((row: any) => ({
+        id: row.id,
+        changeDate: row.change_date,
+        kind: row.kind,
+        notes: row.notes,
+        source: "remote"
+      })));
+    }
     setConnectionStatus("connected");
     return true;
   };
@@ -138,8 +156,8 @@ function FinanceApp() {
   }, [household?.householdId, household?.userId]);
 
   useEffect(() => {
-    Promise.all([AsyncStorage.getItem(STORAGE_MOVEMENTS), AsyncStorage.getItem(STORAGE_CATEGORIES)])
-      .then(([storedMovements, storedCategories]) => {
+    Promise.all([AsyncStorage.getItem(STORAGE_MOVEMENTS), AsyncStorage.getItem(STORAGE_CATEGORIES), AsyncStorage.getItem(STORAGE_GAS_CHANGES)])
+      .then(([storedMovements, storedCategories, storedGasChanges]) => {
         if (storedMovements && (!supabase || !household)) {
           const parsed = JSON.parse(storedMovements) as Movement[];
           setSavedMovements(parsed.map((item) => ({ ...item, occurredAt: item.occurredAt ?? "2026-09-01T12:00:00-04:00" })));
@@ -148,12 +166,14 @@ function FinanceApp() {
           const stored = JSON.parse(storedCategories) as string[];
           setCategories(Array.from(new Set([...stored, ...requestedCategories])));
         }
+        if (storedGasChanges && (!supabase || !household)) setGasChanges(JSON.parse(storedGasChanges) as GasChange[]);
       })
       .catch(() => Alert.alert("Aviso", "No se pudieron recuperar los datos locales."));
   }, [household?.householdId]);
 
   useEffect(() => { AsyncStorage.setItem(STORAGE_MOVEMENTS, JSON.stringify(savedMovements)); }, [savedMovements]);
   useEffect(() => { AsyncStorage.setItem(STORAGE_CATEGORIES, JSON.stringify(categories)); }, [categories]);
+  useEffect(() => { AsyncStorage.setItem(STORAGE_GAS_CHANGES, JSON.stringify(gasChanges)); }, [gasChanges]);
 
   const periodMovements = useMemo(() => {
     const now = new Date();
@@ -184,11 +204,57 @@ function FinanceApp() {
   }, [periodMovements]);
   const pendingCount = savedMovements.filter((item) => !item.category).length;
   const initials = (household?.displayName ?? "MC").split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "MC";
+  const gasForecast = useMemo(() => calculateGasForecast(gasChanges), [gasChanges]);
+  const todayIso = toIsoDate(new Date());
+  const nextPlannedGasChange = useMemo(() => gasChanges
+    .filter((item) => item.kind === "planned" && item.changeDate >= todayIso)
+    .sort((a, b) => a.changeDate.localeCompare(b.changeDate))[0] ?? null, [gasChanges, todayIso]);
+  const sortedGasChanges = useMemo(() => [...gasChanges].sort((a, b) => b.changeDate.localeCompare(a.changeDate)), [gasChanges]);
 
   const openMovement = (movement: Movement | null = null) => {
     setEditingMovement(movement);
     setMovementModalOpen(true);
   };
+
+  const openGasChange = (change: GasChange | null = null) => {
+    setEditingGasChange(change);
+    setGasModalOpen(true);
+  };
+
+  const saveGasChange = async (change: GasChange) => {
+    if (!supabase || !household) {
+      setGasChanges((current) => editingGasChange ? current.map((item) => item.id === editingGasChange.id ? change : item) : [change, ...current]);
+      setGasModalOpen(false);
+      return;
+    }
+    const values = {
+      household_id: household.householdId,
+      change_date: change.changeDate,
+      kind: change.kind,
+      notes: change.notes,
+      created_by: editingGasChange ? undefined : household.userId,
+      updated_at: new Date().toISOString()
+    };
+    const result = editingGasChange
+      ? await supabase.from("gas_cylinder_changes").update(values).eq("id", editingGasChange.id).eq("household_id", household.householdId)
+      : await supabase.from("gas_cylinder_changes").insert(values);
+    if (result.error) return Alert.alert("No se pudo guardar", result.error.code === "23505" ? "Ya existe un registro de este tipo para esa fecha." : result.error.message);
+    setGasModalOpen(false);
+    await loadRemoteData();
+  };
+
+  const deleteGasChange = (change: GasChange) => Alert.alert(
+    "Eliminar fecha",
+    `¿Quieres eliminar el registro del ${formatGasDate(change.changeDate)}?`,
+    [{ text: "Cancelar", style: "cancel" }, { text: "Eliminar", style: "destructive", onPress: async () => {
+      if (supabase && household && change.source === "remote") {
+        const { error } = await supabase.from("gas_cylinder_changes").delete().eq("id", change.id).eq("household_id", household.householdId);
+        if (error) return Alert.alert("No se pudo eliminar", error.message);
+      }
+      setGasChanges((current) => current.filter((item) => item.id !== change.id));
+      setGasModalOpen(false);
+    } }]
+  );
 
   const saveMovement = async (movement: Movement) => {
     if (!supabase || !household) {
@@ -337,6 +403,39 @@ function FinanceApp() {
             </>
           )}
 
+          {activeTab === "garrafa" && (
+            <>
+              <Text style={styles.pageTitle}>Garrafa de gas</Text>
+              <Text style={styles.pageSubtitle}>Registren los cambios y anticipen cuándo podría tocar el siguiente.</Text>
+              {gasSyncUnavailable && <View style={styles.gasWarning}><Text style={styles.gasWarningTitle}>Falta activar esta función</Text><Text style={styles.gasWarningText}>La actualización de la base de datos todavía no fue aplicada. Los demás datos continúan funcionando normalmente.</Text></View>}
+
+              <View style={styles.gasForecastCard}>
+                <Text style={styles.gasForecastEyebrow}>{nextPlannedGasChange ? "PRÓXIMO CAMBIO PROGRAMADO" : "PRÓXIMO CAMBIO ESTIMADO"}</Text>
+                <Text style={styles.gasForecastDate}>{nextPlannedGasChange ? formatGasDate(nextPlannedGasChange.changeDate) : gasForecast ? formatGasDate(gasForecast.nextDate) : "Aún sin pronóstico"}</Text>
+                {nextPlannedGasChange ? (
+                  <Text style={styles.gasForecastCaption}>{gasForecast ? `La estimación del historial es ${formatGasDate(gasForecast.nextDate)}.` : "Agreguen al menos dos cambios realizados para calcular una estimación."}</Text>
+                ) : gasForecast ? (
+                  <Text style={styles.gasForecastCaption}>Promedio de {gasForecast.averageDays} días, calculado con {gasForecast.intervalCount} intervalo{gasForecast.intervalCount === 1 ? "" : "s"} reciente{gasForecast.intervalCount === 1 ? "" : "s"}.</Text>
+                ) : (
+                  <Text style={styles.gasForecastCaption}>Agreguen al menos dos cambios realizados para calcular el ritmo de consumo.</Text>
+                )}
+              </View>
+
+              <TouchableOpacity style={styles.primaryButton} onPress={() => openGasChange()}><Text style={styles.primaryButtonText}>＋ Registrar una fecha</Text></TouchableOpacity>
+
+              <View style={styles.sectionHeader}>
+                <View><Text style={styles.sectionTitle}>Historial y planificación</Text><Text style={styles.sectionHint}>Toca una fecha para editarla</Text></View>
+              </View>
+              {sortedGasChanges.length ? <View style={styles.gasHistoryCard}>{sortedGasChanges.map((item, index) => (
+                <TouchableOpacity key={item.id} onPress={() => openGasChange(item)} style={[styles.gasHistoryRow, index < sortedGasChanges.length - 1 && styles.movementBorder]}>
+                  <View style={[styles.gasIcon, item.kind === "planned" && styles.gasIconPlanned]}><Text style={styles.gasIconText}>{item.kind === "actual" ? "✓" : "◷"}</Text></View>
+                  <View style={{ flex: 1 }}><Text style={styles.gasHistoryDate}>{formatGasDate(item.changeDate)}</Text><Text style={styles.gasHistoryNote}>{item.notes || (item.kind === "actual" ? "Cambio realizado" : "Cambio programado")}</Text></View>
+                  <View style={[styles.gasKindTag, item.kind === "planned" && styles.gasKindTagPlanned]}><Text style={[styles.gasKindText, item.kind === "planned" && styles.gasKindTextPlanned]}>{item.kind === "actual" ? "Realizado" : "Programado"}</Text></View>
+                </TouchableOpacity>
+              ))}</View> : <View style={styles.gasEmptyCard}><Text style={styles.gasEmptyIcon}>◉</Text><Text style={styles.gasEmptyTitle}>Empiecen con el historial</Text><Text style={styles.emptyText}>Agrega las fechas de los últimos cambios para obtener el primer pronóstico.</Text></View>}
+            </>
+          )}
+
           {activeTab === "categorias" && (
             <>
               <Text style={styles.pageTitle}>Categorías</Text>
@@ -386,6 +485,7 @@ function FinanceApp() {
           <NavItem label="Inicio" symbol="⌂" active={activeTab === "inicio"} onPress={() => setActiveTab("inicio")} />
           <NavItem label="Movimientos" symbol="↕" active={activeTab === "movimientos"} onPress={() => setActiveTab("movimientos")} />
           <TouchableOpacity style={styles.addButton} onPress={() => openMovement()}><Text style={styles.addButtonText}>＋</Text></TouchableOpacity>
+          <NavItem label="Garrafa" symbol="◉" active={activeTab === "garrafa"} onPress={() => setActiveTab("garrafa")} />
           <NavItem label="Categorías" symbol="◈" active={activeTab === "categorias"} onPress={() => setActiveTab("categorias")} />
           <NavItem label="Ajustes" symbol="⚙" active={activeTab === "ajustes"} onPress={() => setActiveTab("ajustes")} />
         </View>
@@ -398,6 +498,13 @@ function FinanceApp() {
           onDelete={editingMovement ? () => deleteMovement(editingMovement) : undefined}
         />
         <CategoryEditor visible={categoryModalOpen} onClose={() => setCategoryModalOpen(false)} onSave={createCategory} />
+        <GasChangeEditor
+          visible={gasModalOpen}
+          change={editingGasChange}
+          onClose={() => setGasModalOpen(false)}
+          onSave={saveGasChange}
+          onDelete={editingGasChange ? () => deleteGasChange(editingGasChange) : undefined}
+        />
         <ProfileModal visible={profileModalOpen} household={household} onClose={() => setProfileModalOpen(false)} />
       </View>
     </SafeAreaView>
@@ -463,6 +570,47 @@ function MovementEditor({ visible, movement, categories, onClose, onSave, onDele
   </Modal>;
 }
 
+function GasChangeEditor({ visible, change, onClose, onSave, onDelete }: { visible: boolean; change: GasChange | null; onClose: () => void; onSave: (change: GasChange) => void; onDelete?: () => void }) {
+  const [kind, setKind] = useState<GasChangeKind>("actual");
+  const [date, setDate] = useState("");
+  const [notes, setNotes] = useState("");
+
+  useEffect(() => {
+    setKind(change?.kind ?? "actual");
+    setDate(change ? change.changeDate.split("-").reverse().join("/") : new Date().toLocaleDateString("es-BO"));
+    setNotes(change?.notes ?? "");
+  }, [change, visible]);
+
+  const save = () => {
+    const normalizedDate = normalizeDateInput(date);
+    if (!normalizedDate) return Alert.alert("Fecha inválida", "Escribe la fecha como día/mes/año. Por ejemplo: 21/09/2026.");
+    onSave({
+      id: change?.id ?? String(Date.now()),
+      changeDate: normalizedDate,
+      kind,
+      notes: notes.trim() || null,
+      source: change?.source ?? "local"
+    });
+  };
+
+  return <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+    <SafeAreaView style={styles.modalSafe}><ScrollView contentContainerStyle={styles.modalContent}>
+      <View style={styles.modalHeader}><TouchableOpacity onPress={onClose}><Text style={styles.modalCancel}>Cancelar</Text></TouchableOpacity><Text style={styles.modalTitle}>{change ? "Editar fecha" : "Registrar fecha"}</Text><TouchableOpacity onPress={save}><Text style={styles.modalSave}>Guardar</Text></TouchableOpacity></View>
+      <Text style={styles.inputLabel}>TIPO DE REGISTRO</Text>
+      <View style={styles.kindRow}>
+        <TouchableOpacity onPress={() => setKind("actual")} style={[styles.kindButton, kind === "actual" && styles.gasKindButtonActual]}><Text style={[styles.kindText, kind === "actual" && styles.kindTextActive]}>Cambio realizado</Text></TouchableOpacity>
+        <TouchableOpacity onPress={() => setKind("planned")} style={[styles.kindButton, kind === "planned" && styles.gasKindButtonPlanned]}><Text style={[styles.kindText, kind === "planned" && styles.kindTextActive]}>Cambio programado</Text></TouchableOpacity>
+      </View>
+      <Text style={styles.gasEditorHelp}>{kind === "actual" ? "Esta fecha se utilizará para mejorar el pronóstico." : "Esta fecha aparecerá como planificación, pero no modificará el promedio de consumo."}</Text>
+      <Text style={styles.inputLabel}>FECHA</Text>
+      <TextInput value={date} onChangeText={setDate} keyboardType="numbers-and-punctuation" placeholder="DD/MM/AAAA" style={styles.textInput} />
+      <Text style={styles.inputLabel}>NOTA OPCIONAL</Text>
+      <TextInput value={notes} onChangeText={setNotes} placeholder="Ej. La garrafa duró menos por el invierno" style={styles.textInput} multiline />
+      {change && onDelete && <TouchableOpacity onPress={onDelete} style={styles.deleteButton}><Text style={styles.deleteButtonText}>Eliminar esta fecha</Text></TouchableOpacity>}
+    </ScrollView></SafeAreaView>
+  </Modal>;
+}
+
 function CategoryEditor({ visible, onClose, onSave }: { visible: boolean; onClose: () => void; onSave: (name: string) => void }) {
   const [name, setName] = useState("");
   useEffect(() => { if (visible) setName(""); }, [visible]);
@@ -506,8 +654,11 @@ const styles = StyleSheet.create({
   pageTitle: { fontSize: 30, fontWeight: "800", color: "#17203A", marginTop: 8 }, pageSubtitle: { color: "#7E8598", lineHeight: 20, marginTop: 6, marginBottom: 22 }, pendingBanner: { flexDirection: "row", backgroundColor: "#FFF5DE", padding: 14, borderRadius: 17, alignItems: "center", gap: 12, marginBottom: 16 }, pendingIcon: { width: 28, height: 28, borderRadius: 14, backgroundColor: "#E8A838", color: "white", textAlign: "center", lineHeight: 28, fontWeight: "900" }, pendingTitle: { color: "#6A4A12", fontWeight: "800" }, pendingText: { color: "#957240", fontSize: 11, marginTop: 2 }, chips: { flexDirection: "row", gap: 8, marginBottom: 14 }, categoryFilters: { gap: 8, paddingBottom: 14 }, chip: { backgroundColor: "#EAECF3", paddingHorizontal: 14, paddingVertical: 9, borderRadius: 16 }, chipActive: { backgroundColor: "#17203A", paddingHorizontal: 14, paddingVertical: 9, borderRadius: 16 }, chipText: { color: "#6C7385", fontWeight: "700", fontSize: 12 }, chipActiveText: { color: "white", fontWeight: "700", fontSize: 12 }, emptyText: { textAlign: "center", color: "#8A91A3", paddingVertical: 18 },
   primaryButton: { backgroundColor: "#6D5EF7", paddingVertical: 14, borderRadius: 16, alignItems: "center", marginBottom: 16 }, primaryButtonText: { color: "white", fontWeight: "800" }, manageCategoryRow: { flexDirection: "row", alignItems: "center", paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: "#F1F2F6" }, categoryIcon: { width: 38, height: 38, borderRadius: 12, alignItems: "center", justifyContent: "center", marginRight: 12 }, manageCategoryName: { flex: 1, fontWeight: "700", color: "#2D3448" }, chevron: { fontSize: 24, color: "#A3A8B5" },
   settingsCard: { backgroundColor: "white", borderRadius: 20, paddingHorizontal: 18 }, settingRow: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 17, borderBottomWidth: 1, borderBottomColor: "#F0F1F5" }, statusDot: { width: 11, height: 11, borderRadius: 6 }, statusConnected: { backgroundColor: "#20A477" }, statusOffline: { backgroundColor: "#EF6A6A" }, statusPending: { backgroundColor: "#E8A838" }, settingTitle: { color: "#232A3E", fontWeight: "800" }, settingHint: { color: "#8A91A3", fontSize: 11, marginTop: 3 }, settingState: { color: "#6D5EF7", fontWeight: "700", fontSize: 11 }, notificationButton: { backgroundColor: "#6D5EF7", borderRadius: 14, paddingVertical: 13, alignItems: "center", marginBottom: 16 }, notificationButtonText: { color: "white", fontWeight: "800" },
-  nav: { position: "absolute", bottom: 0, left: 0, right: 0, height: 84, backgroundColor: "white", borderTopWidth: 1, borderTopColor: "#ECEEF3", flexDirection: "row", alignItems: "center", justifyContent: "space-around", paddingBottom: 8 }, navItem: { alignItems: "center", width: 66 }, navSymbol: { color: "#9AA0AF", fontSize: 21 }, navLabel: { color: "#9AA0AF", fontSize: 9, marginTop: 4, fontWeight: "600" }, navActive: { color: "#6D5EF7" }, addButton: { width: 50, height: 50, borderRadius: 17, backgroundColor: "#6D5EF7", alignItems: "center", justifyContent: "center", marginTop: -25, shadowColor: "#6D5EF7", shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 6 } }, addButtonText: { color: "white", fontSize: 27, lineHeight: 29 },
+  nav: { position: "absolute", bottom: 0, left: 0, right: 0, height: 84, backgroundColor: "white", borderTopWidth: 1, borderTopColor: "#ECEEF3", flexDirection: "row", alignItems: "center", justifyContent: "space-around", paddingBottom: 8 }, navItem: { alignItems: "center", flex: 1, minWidth: 48 }, navSymbol: { color: "#9AA0AF", fontSize: 20 }, navLabel: { color: "#9AA0AF", fontSize: 8, marginTop: 4, fontWeight: "600" }, navActive: { color: "#6D5EF7" }, addButton: { width: 46, height: 46, borderRadius: 16, backgroundColor: "#6D5EF7", alignItems: "center", justifyContent: "center", marginTop: -25, shadowColor: "#6D5EF7", shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 6 } }, addButtonText: { color: "white", fontSize: 25, lineHeight: 27 },
   modalSafe: { flex: 1, backgroundColor: "#F6F7FB" }, modalContent: { padding: 20, paddingBottom: 50 }, modalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 30 }, modalTitle: { fontSize: 17, fontWeight: "800", color: "#17203A" }, modalCancel: { color: "#7C8497", fontWeight: "600" }, modalSave: { color: "#6D5EF7", fontWeight: "800" }, inputLabel: { color: "#777F92", fontSize: 10, letterSpacing: 1.1, fontWeight: "800", marginTop: 20, marginBottom: 8 }, kindRow: { flexDirection: "row", gap: 10 }, kindButton: { flex: 1, paddingVertical: 14, alignItems: "center", backgroundColor: "#E9EBF2", borderRadius: 14 }, kindButtonExpense: { backgroundColor: "#EF6A6A" }, kindButtonIncome: { backgroundColor: "#20A477" }, kindText: { color: "#697084", fontWeight: "800" }, kindTextActive: { color: "white" }, amountInput: { backgroundColor: "white", borderRadius: 18, padding: 18, fontSize: 30, fontWeight: "800", color: "#17203A" }, textInput: { backgroundColor: "white", borderRadius: 14, paddingHorizontal: 15, paddingVertical: 14, fontSize: 15, color: "#17203A", borderWidth: 1, borderColor: "#E7E9F0" }, categoryPicker: { flexDirection: "row", flexWrap: "wrap", gap: 8 }, pickerChip: { backgroundColor: "#E9EBF2", paddingHorizontal: 12, paddingVertical: 9, borderRadius: 14 }, pickerChipActive: { backgroundColor: "#6D5EF7", paddingHorizontal: 12, paddingVertical: 9, borderRadius: 14 }, pickerChipText: { color: "#626A7C", fontWeight: "700", fontSize: 12 }, pickerChipTextActive: { color: "white", fontWeight: "700", fontSize: 12 }, clearCategory: { color: "#D05A67", textAlign: "center", marginTop: 24, fontWeight: "700" }, deleteButton: { borderWidth: 1, borderColor: "#F1B7BD", borderRadius: 14, paddingVertical: 13, alignItems: "center", marginTop: 18 }, deleteButtonText: { color: "#C94C59", fontWeight: "800" },
   dialogBackdrop: { flex: 1, backgroundColor: "rgba(20,25,40,0.45)", justifyContent: "center", padding: 24 }, dialog: { backgroundColor: "#F8F9FC", borderRadius: 22, padding: 20 }, dialogTitle: { fontSize: 20, fontWeight: "800", color: "#17203A", marginBottom: 18 }, dialogActions: { flexDirection: "row", justifyContent: "flex-end", gap: 24, marginTop: 20 },
-  profileSafe: { flex: 1, backgroundColor: "#F6F7FB" }, profileContent: { padding: 24, paddingBottom: 50 }, profileHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" }, profileTitle: { fontSize: 28, fontWeight: "900", color: "#17203A" }, profileAvatar: { alignSelf: "center", width: 88, height: 88, borderRadius: 28, backgroundColor: "#EAE7FF", alignItems: "center", justifyContent: "center", marginTop: 34 }, profileAvatarText: { color: "#5949E8", fontSize: 28, fontWeight: "900" }, profileName: { textAlign: "center", color: "#17203A", fontSize: 22, fontWeight: "900", marginTop: 16 }, profileEmail: { textAlign: "center", color: "#7E8598", marginTop: 5 }, profileCard: { backgroundColor: "white", borderRadius: 22, padding: 20, marginTop: 30 }, profileLabel: { color: "#8A91A3", fontSize: 10, letterSpacing: 1.2, fontWeight: "800" }, profileValue: { color: "#232A3E", fontSize: 18, fontWeight: "800", marginTop: 7 }, profileDivider: { height: 1, backgroundColor: "#ECEEF3", marginVertical: 20 }, inviteCode: { color: "#6D5EF7", fontSize: 27, letterSpacing: 4, fontWeight: "900", marginTop: 8 }, profileHelp: { color: "#8A91A3", fontSize: 12, lineHeight: 18, marginTop: 12 }
+  profileSafe: { flex: 1, backgroundColor: "#F6F7FB" }, profileContent: { padding: 24, paddingBottom: 50 }, profileHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" }, profileTitle: { fontSize: 28, fontWeight: "900", color: "#17203A" }, profileAvatar: { alignSelf: "center", width: 88, height: 88, borderRadius: 28, backgroundColor: "#EAE7FF", alignItems: "center", justifyContent: "center", marginTop: 34 }, profileAvatarText: { color: "#5949E8", fontSize: 28, fontWeight: "900" }, profileName: { textAlign: "center", color: "#17203A", fontSize: 22, fontWeight: "900", marginTop: 16 }, profileEmail: { textAlign: "center", color: "#7E8598", marginTop: 5 }, profileCard: { backgroundColor: "white", borderRadius: 22, padding: 20, marginTop: 30 }, profileLabel: { color: "#8A91A3", fontSize: 10, letterSpacing: 1.2, fontWeight: "800" }, profileValue: { color: "#232A3E", fontSize: 18, fontWeight: "800", marginTop: 7 }, profileDivider: { height: 1, backgroundColor: "#ECEEF3", marginVertical: 20 }, inviteCode: { color: "#6D5EF7", fontSize: 27, letterSpacing: 4, fontWeight: "900", marginTop: 8 }, profileHelp: { color: "#8A91A3", fontSize: 12, lineHeight: 18, marginTop: 12 },
+  gasForecastCard: { backgroundColor: "#17203A", borderRadius: 24, padding: 22, marginBottom: 16 }, gasForecastEyebrow: { color: "#A9B1C7", fontSize: 10, letterSpacing: 1.2, fontWeight: "900" }, gasForecastDate: { color: "white", fontSize: 25, fontWeight: "900", marginTop: 9 }, gasForecastCaption: { color: "#C8CDDA", fontSize: 12, lineHeight: 18, marginTop: 8 },
+  gasHistoryCard: { backgroundColor: "white", borderRadius: 20, paddingHorizontal: 16 }, gasHistoryRow: { flexDirection: "row", alignItems: "center", paddingVertical: 15, gap: 11 }, gasIcon: { width: 38, height: 38, borderRadius: 13, alignItems: "center", justifyContent: "center", backgroundColor: "#DFF6EE" }, gasIconPlanned: { backgroundColor: "#EEEAFE" }, gasIconText: { color: "#4E46B9", fontWeight: "900" }, gasHistoryDate: { color: "#232A3E", fontWeight: "800", fontSize: 14 }, gasHistoryNote: { color: "#8A91A3", fontSize: 11, marginTop: 3 }, gasKindTag: { backgroundColor: "#DFF6EE", borderRadius: 9, paddingHorizontal: 8, paddingVertical: 5 }, gasKindTagPlanned: { backgroundColor: "#EEEAFE" }, gasKindText: { color: "#167B5C", fontSize: 9, fontWeight: "800" }, gasKindTextPlanned: { color: "#5B50CA" },
+  gasEmptyCard: { backgroundColor: "white", borderRadius: 20, padding: 24, alignItems: "center" }, gasEmptyIcon: { fontSize: 30, color: "#6D5EF7" }, gasEmptyTitle: { color: "#232A3E", fontSize: 17, fontWeight: "900", marginTop: 10 }, gasWarning: { backgroundColor: "#FFF5DE", borderRadius: 16, padding: 14, marginBottom: 14 }, gasWarningTitle: { color: "#6A4A12", fontWeight: "900" }, gasWarningText: { color: "#957240", fontSize: 11, lineHeight: 17, marginTop: 4 }, gasKindButtonActual: { backgroundColor: "#20A477" }, gasKindButtonPlanned: { backgroundColor: "#6D5EF7" }, gasEditorHelp: { color: "#7E8598", fontSize: 12, lineHeight: 18, marginTop: 12 }
 });
