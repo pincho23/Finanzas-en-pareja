@@ -5,7 +5,7 @@ import { isSupabaseConfigured, supabase } from "./src/lib/supabase";
 import { AuthGate, useHousehold } from "./src/auth/AuthGate";
 import { enableWebPushNotifications, pushStatusText, registerPushNotifications, type PushRegistrationStatus } from "./src/notifications/pushNotifications";
 import { registerWebApp } from "./src/web/registerWebApp";
-import { calculateGasForecast, formatGasDate, normalizeDateInput, toIsoDate, type GasChange, type GasChangeKind } from "./src/gas/gasForecast";
+import { calculateGasForecast, dateAtNoon, formatGasDate, normalizeDateInput, toIsoDate, type GasChange, type GasChangeKind } from "./src/gas/gasForecast";
 import {
   Alert,
   AppState,
@@ -535,17 +535,69 @@ function MovementList({ items, onSelect }: { items: Movement[]; onSelect: (movem
   ))}</View>;
 }
 
+function CalendarPicker({ visible, value, onClose, onSelect }: { visible: boolean; value: string; onClose: () => void; onSelect: (value: string) => void }) {
+  const [visibleMonth, setVisibleMonth] = useState(() => {
+    const selected = dateAtNoon(value);
+    return new Date(selected.getFullYear(), selected.getMonth(), 1, 12);
+  });
+
+  useEffect(() => {
+    if (!visible) return;
+    const selected = dateAtNoon(value);
+    setVisibleMonth(new Date(selected.getFullYear(), selected.getMonth(), 1, 12));
+  }, [visible, value]);
+
+  const year = visibleMonth.getFullYear();
+  const month = visibleMonth.getMonth();
+  const firstDayOffset = (new Date(year, month, 1, 12).getDay() + 6) % 7;
+  const daysInMonth = new Date(year, month + 1, 0, 12).getDate();
+  const cells = Array.from({ length: firstDayOffset + daysInMonth }, (_, index) => index < firstDayOffset ? null : index - firstDayOffset + 1);
+  const today = toIsoDate(new Date());
+  const monthLabel = visibleMonth.toLocaleDateString("es-BO", { month: "long", year: "numeric" });
+
+  const changeMonth = (offset: number) => setVisibleMonth(new Date(year, month + offset, 1, 12));
+  const selectToday = () => onSelect(today);
+
+  return <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <View style={styles.calendarBackdrop}>
+      <TouchableOpacity accessibilityLabel="Cerrar calendario" style={styles.calendarDismissArea} onPress={onClose} />
+      <View style={styles.calendarSheet}>
+        <View style={styles.calendarHandle} />
+        <View style={styles.calendarHeader}>
+          <TouchableOpacity accessibilityLabel="Mes anterior" onPress={() => changeMonth(-1)} style={styles.calendarArrow}><Text style={styles.calendarArrowText}>‹</Text></TouchableOpacity>
+          <Text style={styles.calendarMonth}>{monthLabel.charAt(0).toUpperCase() + monthLabel.slice(1)}</Text>
+          <TouchableOpacity accessibilityLabel="Mes siguiente" onPress={() => changeMonth(1)} style={styles.calendarArrow}><Text style={styles.calendarArrowText}>›</Text></TouchableOpacity>
+        </View>
+        <View style={styles.calendarWeekRow}>{["L", "M", "M", "J", "V", "S", "D"].map((day, index) => <Text key={`${day}-${index}`} style={styles.calendarWeekDay}>{day}</Text>)}</View>
+        <View style={styles.calendarGrid}>{cells.map((day, index) => {
+          if (!day) return <View key={`blank-${index}`} style={styles.calendarDayCell} />;
+          const dateValue = toIsoDate(new Date(year, month, day, 12));
+          const selected = dateValue === value;
+          const isToday = dateValue === today;
+          return <TouchableOpacity key={dateValue} accessibilityLabel={formatGasDate(dateValue)} onPress={() => onSelect(dateValue)} style={styles.calendarDayCell}>
+            <View style={[styles.calendarDayCircle, isToday && styles.calendarToday, selected && styles.calendarSelected]}><Text style={[styles.calendarDayText, selected && styles.calendarSelectedText]}>{day}</Text></View>
+          </TouchableOpacity>;
+        })}</View>
+        <TouchableOpacity onPress={selectToday} style={styles.calendarTodayButton}><Text style={styles.calendarTodayButtonText}>Ir a hoy</Text></TouchableOpacity>
+      </View>
+    </View>
+  </Modal>;
+}
+
 function MovementEditor({ visible, movement, categories, onClose, onSave, onDelete }: { visible: boolean; movement: Movement | null; categories: string[]; onClose: () => void; onSave: (movement: Movement) => void; onDelete?: () => void }) {
   const [kind, setKind] = useState<"income" | "expense">("expense");
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState<string | null>(null);
+  const [occurredDate, setOccurredDate] = useState(toIsoDate(new Date()));
+  const [calendarOpen, setCalendarOpen] = useState(false);
 
   useEffect(() => {
     setKind(movement?.amount && movement.amount > 0 ? "income" : "expense");
     setAmount(movement ? String(Math.abs(movement.amount)) : "");
     setDescription(movement?.title ?? "");
     setCategory(movement?.category ?? null);
+    setOccurredDate(movement ? toIsoDate(new Date(movement.occurredAt)) : toIsoDate(new Date()));
   }, [movement, visible]);
 
   const save = () => {
@@ -554,15 +606,19 @@ function MovementEditor({ visible, movement, categories, onClose, onSave, onDele
       Alert.alert("Faltan datos", "Ingresa una descripción y un importe válido.");
       return;
     }
+    const dateParts = occurredDate.split("-").map(Number);
+    const occurredAt = movement ? new Date(movement.occurredAt) : new Date();
+    occurredAt.setFullYear(dateParts[0]!, dateParts[1]! - 1, dateParts[2]!);
+    const detailPrefix = movement?.detail.split(" · ")[0] ?? "Registro manual";
     onSave({
       id: movement?.id ?? String(Date.now()),
       title: description.trim(),
-      detail: movement?.detail ?? `Registro manual · ${new Date().toLocaleDateString("es-BO")}`,
+      detail: `${detailPrefix} · ${dateAtNoon(occurredDate).toLocaleDateString("es-BO", { day: "numeric", month: "short" })}`,
       amount: kind === "income" ? numericAmount : -numericAmount,
       category,
       color: movement?.color ?? "#6D5EF7",
-      day: movement?.day ?? String(new Date().getDate()).padStart(2, "0"),
-      occurredAt: movement?.occurredAt ?? new Date().toISOString()
+      day: String(dateParts[2]).padStart(2, "0"),
+      occurredAt: occurredAt.toISOString()
     });
   };
 
@@ -571,11 +627,18 @@ function MovementEditor({ visible, movement, categories, onClose, onSave, onDele
       <View style={styles.modalHeader}><TouchableOpacity onPress={onClose}><Text style={styles.modalCancel}>Cancelar</Text></TouchableOpacity><Text style={styles.modalTitle}>{movement ? "Editar movimiento" : "Nuevo movimiento"}</Text><TouchableOpacity onPress={save}><Text style={styles.modalSave}>Guardar</Text></TouchableOpacity></View>
       <Text style={styles.inputLabel}>TIPO</Text>
       <View style={styles.kindRow}><TouchableOpacity onPress={() => setKind("expense")} style={[styles.kindButton, kind === "expense" && styles.kindButtonExpense]}><Text style={[styles.kindText, kind === "expense" && styles.kindTextActive]}>Gasto</Text></TouchableOpacity><TouchableOpacity onPress={() => setKind("income")} style={[styles.kindButton, kind === "income" && styles.kindButtonIncome]}><Text style={[styles.kindText, kind === "income" && styles.kindTextActive]}>Ingreso</Text></TouchableOpacity></View>
+      <Text style={styles.inputLabel}>FECHA</Text>
+      <TouchableOpacity accessibilityLabel="Seleccionar fecha" onPress={() => setCalendarOpen(true)} style={styles.datePickerButton}>
+        <View style={styles.datePickerIcon}><Text style={styles.datePickerIconText}>▣</Text></View>
+        <View style={{ flex: 1 }}><Text style={styles.datePickerValue}>{formatGasDate(occurredDate)}</Text><Text style={styles.datePickerHint}>Toca para cambiar el día</Text></View>
+        <Text style={styles.datePickerChevron}>›</Text>
+      </TouchableOpacity>
       <Text style={styles.inputLabel}>IMPORTE EN BOLIVIANOS</Text><TextInput value={amount} onChangeText={setAmount} keyboardType="decimal-pad" placeholder="0,00" style={styles.amountInput} />
       <Text style={styles.inputLabel}>DESCRIPCIÓN</Text><TextInput value={description} onChangeText={setDescription} placeholder="Ej. Supermercado semanal" style={styles.textInput} />
       <Text style={styles.inputLabel}>CATEGORÍA</Text><View style={styles.categoryPicker}>{categories.map((item) => <TouchableOpacity key={item} onPress={() => setCategory(item)} style={[styles.pickerChip, category === item && styles.pickerChipActive]}><Text style={[styles.pickerChipText, category === item && styles.pickerChipTextActive]}>{item}</Text></TouchableOpacity>)}</View>
       {movement && <TouchableOpacity onPress={() => setCategory(null)}><Text style={styles.clearCategory}>Dejar pendiente de clasificación</Text></TouchableOpacity>}
       {movement && onDelete && <TouchableOpacity onPress={onDelete} style={styles.deleteButton}><Text style={styles.deleteButtonText}>Eliminar movimiento</Text></TouchableOpacity>}
+      <CalendarPicker visible={calendarOpen} value={occurredDate} onClose={() => setCalendarOpen(false)} onSelect={(value) => { setOccurredDate(value); setCalendarOpen(false); }} />
     </ScrollView></SafeAreaView>
   </Modal>;
 }
@@ -688,6 +751,8 @@ const styles = StyleSheet.create({
   settingsCard: { backgroundColor: "white", borderRadius: 20, paddingHorizontal: 18 }, settingRow: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 17, borderBottomWidth: 1, borderBottomColor: "#F0F1F5" }, statusDot: { width: 11, height: 11, borderRadius: 6 }, statusConnected: { backgroundColor: "#20A477" }, statusOffline: { backgroundColor: "#EF6A6A" }, statusPending: { backgroundColor: "#E8A838" }, settingTitle: { color: "#232A3E", fontWeight: "800" }, settingHint: { color: "#8A91A3", fontSize: 11, marginTop: 3 }, settingState: { color: "#6D5EF7", fontWeight: "700", fontSize: 11 }, notificationButton: { backgroundColor: "#6D5EF7", borderRadius: 14, paddingVertical: 13, alignItems: "center", marginBottom: 16 }, notificationButtonText: { color: "white", fontWeight: "800" },
   nav: { position: "absolute", bottom: 0, left: 0, right: 0, height: 84, backgroundColor: "white", borderTopWidth: 1, borderTopColor: "#ECEEF3", flexDirection: "row", alignItems: "center", paddingHorizontal: 6, paddingBottom: 8 }, navSide: { flex: 1, flexDirection: "row", alignItems: "center" }, navItem: { alignItems: "center", justifyContent: "center", flex: 1, minWidth: 58 }, navSymbol: { color: "#9AA0AF", fontSize: 20, height: 24 }, navLabel: { color: "#9AA0AF", fontSize: 9, marginTop: 3, fontWeight: "600" }, navActive: { color: "#6D5EF7" }, addButton: { width: 54, height: 54, borderRadius: 18, backgroundColor: "#6D5EF7", alignItems: "center", justifyContent: "center", marginTop: -28, marginHorizontal: 4, shadowColor: "#6D5EF7", shadowOpacity: 0.32, shadowRadius: 12, shadowOffset: { width: 0, height: 7 }, elevation: 7 }, addButtonText: { color: "white", fontSize: 28, lineHeight: 30 },
   modalSafe: { flex: 1, backgroundColor: "#F6F7FB" }, modalContent: { padding: 20, paddingBottom: 50 }, modalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 30 }, modalTitle: { fontSize: 17, fontWeight: "800", color: "#17203A" }, modalCancel: { color: "#7C8497", fontWeight: "600" }, modalSave: { color: "#6D5EF7", fontWeight: "800" }, inputLabel: { color: "#777F92", fontSize: 10, letterSpacing: 1.1, fontWeight: "800", marginTop: 20, marginBottom: 8 }, kindRow: { flexDirection: "row", gap: 10 }, kindButton: { flex: 1, paddingVertical: 14, alignItems: "center", backgroundColor: "#E9EBF2", borderRadius: 14 }, kindButtonExpense: { backgroundColor: "#EF6A6A" }, kindButtonIncome: { backgroundColor: "#20A477" }, kindText: { color: "#697084", fontWeight: "800" }, kindTextActive: { color: "white" }, amountInput: { backgroundColor: "white", borderRadius: 18, padding: 18, fontSize: 30, fontWeight: "800", color: "#17203A" }, textInput: { backgroundColor: "white", borderRadius: 14, paddingHorizontal: 15, paddingVertical: 14, fontSize: 15, color: "#17203A", borderWidth: 1, borderColor: "#E7E9F0" }, categoryPicker: { flexDirection: "row", flexWrap: "wrap", gap: 8 }, pickerChip: { backgroundColor: "#E9EBF2", paddingHorizontal: 12, paddingVertical: 9, borderRadius: 14 }, pickerChipActive: { backgroundColor: "#6D5EF7", paddingHorizontal: 12, paddingVertical: 9, borderRadius: 14 }, pickerChipText: { color: "#626A7C", fontWeight: "700", fontSize: 12 }, pickerChipTextActive: { color: "white", fontWeight: "700", fontSize: 12 }, clearCategory: { color: "#D05A67", textAlign: "center", marginTop: 24, fontWeight: "700" }, deleteButton: { borderWidth: 1, borderColor: "#F1B7BD", borderRadius: 14, paddingVertical: 13, alignItems: "center", marginTop: 18 }, deleteButtonText: { color: "#C94C59", fontWeight: "800" },
+  datePickerButton: { backgroundColor: "white", borderRadius: 16, borderWidth: 1, borderColor: "#E7E9F0", padding: 13, flexDirection: "row", alignItems: "center", gap: 12 }, datePickerIcon: { width: 40, height: 40, borderRadius: 13, backgroundColor: "#EAE7FF", alignItems: "center", justifyContent: "center" }, datePickerIconText: { color: "#5949E8", fontSize: 18, fontWeight: "900" }, datePickerValue: { color: "#232A3E", fontSize: 15, fontWeight: "900" }, datePickerHint: { color: "#8A91A3", fontSize: 10, marginTop: 3 }, datePickerChevron: { color: "#A3A8B5", fontSize: 26 },
+  calendarBackdrop: { flex: 1, backgroundColor: "rgba(20,25,40,0.42)", justifyContent: "flex-end" }, calendarDismissArea: { flex: 1 }, calendarSheet: { backgroundColor: "#F8F9FC", borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 18, paddingTop: 10, paddingBottom: 30 }, calendarHandle: { width: 42, height: 5, borderRadius: 3, backgroundColor: "#D5D8E1", alignSelf: "center", marginBottom: 15 }, calendarHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 13 }, calendarMonth: { color: "#17203A", fontSize: 18, fontWeight: "900" }, calendarArrow: { width: 42, height: 42, borderRadius: 14, backgroundColor: "white", alignItems: "center", justifyContent: "center" }, calendarArrowText: { color: "#5949E8", fontSize: 29, lineHeight: 31 }, calendarWeekRow: { flexDirection: "row", marginBottom: 5 }, calendarWeekDay: { width: "14.285%", textAlign: "center", color: "#9AA0AF", fontSize: 10, fontWeight: "900" }, calendarGrid: { flexDirection: "row", flexWrap: "wrap" }, calendarDayCell: { width: "14.285%", height: 44, alignItems: "center", justifyContent: "center" }, calendarDayCircle: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" }, calendarToday: { borderWidth: 1, borderColor: "#6D5EF7" }, calendarSelected: { backgroundColor: "#6D5EF7", borderColor: "#6D5EF7" }, calendarDayText: { color: "#30374B", fontWeight: "700", fontSize: 13 }, calendarSelectedText: { color: "white", fontWeight: "900" }, calendarTodayButton: { marginTop: 12, backgroundColor: "#EAE7FF", borderRadius: 14, paddingVertical: 12, alignItems: "center" }, calendarTodayButtonText: { color: "#5949E8", fontWeight: "900" },
   dialogBackdrop: { flex: 1, backgroundColor: "rgba(20,25,40,0.45)", justifyContent: "center", padding: 24 }, dialog: { backgroundColor: "#F8F9FC", borderRadius: 22, padding: 20 }, dialogTitle: { fontSize: 20, fontWeight: "800", color: "#17203A", marginBottom: 18 }, dialogActions: { flexDirection: "row", justifyContent: "flex-end", gap: 24, marginTop: 20 },
   profileSafe: { flex: 1, backgroundColor: "#F6F7FB" }, profileContent: { padding: 24, paddingBottom: 50 }, profileHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" }, profileTitle: { fontSize: 28, fontWeight: "900", color: "#17203A" }, profileAvatar: { alignSelf: "center", width: 88, height: 88, borderRadius: 28, backgroundColor: "#EAE7FF", alignItems: "center", justifyContent: "center", marginTop: 34 }, profileAvatarText: { color: "#5949E8", fontSize: 28, fontWeight: "900" }, profileName: { textAlign: "center", color: "#17203A", fontSize: 22, fontWeight: "900", marginTop: 16 }, profileEmail: { textAlign: "center", color: "#7E8598", marginTop: 5 }, profileCard: { backgroundColor: "white", borderRadius: 22, padding: 20, marginTop: 30 }, profileLabel: { color: "#8A91A3", fontSize: 10, letterSpacing: 1.2, fontWeight: "800" }, profileValue: { color: "#232A3E", fontSize: 18, fontWeight: "800", marginTop: 7 }, profileDivider: { height: 1, backgroundColor: "#ECEEF3", marginVertical: 20 }, inviteCode: { color: "#6D5EF7", fontSize: 27, letterSpacing: 4, fontWeight: "900", marginTop: 8 }, profileHelp: { color: "#8A91A3", fontSize: 12, lineHeight: 18, marginTop: 12 },
   gasForecastCard: { backgroundColor: "#17203A", borderRadius: 24, padding: 22, marginBottom: 16 }, gasForecastEyebrow: { color: "#A9B1C7", fontSize: 10, letterSpacing: 1.2, fontWeight: "900" }, gasForecastDate: { color: "white", fontSize: 25, fontWeight: "900", marginTop: 9 }, gasForecastCaption: { color: "#C8CDDA", fontSize: 12, lineHeight: 18, marginTop: 8 },
