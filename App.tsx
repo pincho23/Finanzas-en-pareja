@@ -6,7 +6,7 @@ import { AuthGate, useHousehold } from "./src/auth/AuthGate";
 import { enableWebPushNotifications, pushStatusText, registerPushNotifications, type PushRegistrationStatus } from "./src/notifications/pushNotifications";
 import { registerWebApp } from "./src/web/registerWebApp";
 import { calculateGasForecast, dateAtNoon, formatGasDate, normalizeDateInput, toIsoDate, type GasChange, type GasChangeKind } from "./src/gas/gasForecast";
-import { summarizeMonthlyCategories } from "./src/budget/categoryComparison";
+import { monthlyIncomeTotal, summarizeMonthlyCategories } from "./src/budget/categoryComparison";
 import {
   Alert,
   AppState,
@@ -31,7 +31,6 @@ type Movement = {
   occurredAt: string;
   categoryId?: string | null;
   source?: "remote" | "local";
-  allocations?: IncomeAllocation[];
 };
 
 type RemoteCategory = { id: string; name: string };
@@ -95,6 +94,8 @@ function FinanceApp() {
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [comparisonMonth, setComparisonMonth] = useState(monthKey());
   const [allocationSyncUnavailable, setAllocationSyncUnavailable] = useState(false);
+  const [monthlyIncomeAllocations, setMonthlyIncomeAllocations] = useState<IncomeAllocation[]>([]);
+  const [monthlyAllocationModalOpen, setMonthlyAllocationModalOpen] = useState(false);
 
   useEffect(() => {
     registerWebApp();
@@ -123,7 +124,7 @@ function FinanceApp() {
       supabase.from("categories").select("id, name").eq("household_id", household.householdId).is("archived_at", null).order("name"),
       supabase.from("transactions").select("id, category_id, kind, amount, occurred_at, description, counterparty, channel, categories(name)").eq("household_id", household.householdId).order("occurred_at", { ascending: false }),
       supabase.from("gas_cylinder_changes").select("id, change_date, kind, notes").eq("household_id", household.householdId).order("change_date", { ascending: false }),
-      supabase.from("income_allocations").select("id, transaction_id, category_id, allocation_month, amount, categories(name)").eq("household_id", household.householdId)
+      supabase.from("monthly_income_allocations").select("id, category_id, allocation_month, amount, categories(name)").eq("household_id", household.householdId)
     ]);
     const error = categoryResult.error ?? transactionResult.error;
     if (error) {
@@ -136,16 +137,14 @@ function FinanceApp() {
     setCategories(categoryRows.map((item) => item.name));
     const allocationRows = allocationResult.error ? [] : (allocationResult.data ?? []);
     setAllocationSyncUnavailable(Boolean(allocationResult.error));
-    setSavedMovements((transactionResult.data ?? []).map((row: any) => ({
-      ...mapTransaction(row),
-      allocations: allocationRows.filter((allocation: any) => allocation.transaction_id === row.id).map((allocation: any) => ({
-        id: allocation.id,
-        category: allocation.categories?.name ?? "Categoría",
-        categoryId: allocation.category_id,
-        amount: Number(allocation.amount),
-        month: allocation.allocation_month
-      }))
+    setMonthlyIncomeAllocations(allocationRows.map((allocation: any) => ({
+      id: allocation.id,
+      category: allocation.categories?.name ?? "Categoría",
+      categoryId: allocation.category_id,
+      amount: Number(allocation.amount),
+      month: allocation.allocation_month
     })));
+    setSavedMovements((transactionResult.data ?? []).map(mapTransaction));
     if (gasResult.error) setGasSyncUnavailable(true);
     else {
       setGasSyncUnavailable(false);
@@ -213,7 +212,7 @@ function FinanceApp() {
   }), [periodMovements]);
   const filteredMovements = useMemo(() => savedMovements.filter((item) => {
     const matchesKind = movementFilter === "all" || (movementFilter === "income" ? item.amount > 0 : item.amount < 0);
-    const matchesCategory = !categoryFilter || item.category === categoryFilter || item.allocations?.some((allocation) => allocation.category === categoryFilter);
+    const matchesCategory = !categoryFilter || item.category === categoryFilter;
     return matchesKind && matchesCategory;
   }), [savedMovements, movementFilter, categoryFilter]);
   const categorySummary = useMemo(() => {
@@ -226,8 +225,11 @@ function FinanceApp() {
     const total = Array.from(totalsByCategory.values()).reduce((sum, value) => sum + value, 0);
     return Array.from(totalsByCategory.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([name, value], index) => ({ name, value, percentage: total ? Math.round(value / total * 100) : 0, color: palette[index] ?? "#64748B" }));
   }, [periodMovements]);
-  const monthlyCategoryComparison = useMemo(() => summarizeMonthlyCategories(savedMovements, comparisonMonth), [savedMovements, comparisonMonth]);
-  const pendingMovements = savedMovements.filter((item) => item.amount < 0 ? !item.category : (item.allocations ?? []).reduce((sum, allocation) => sum + allocation.amount, 0) < item.amount);
+  const monthlyCategoryComparison = useMemo(() => summarizeMonthlyCategories(savedMovements, monthlyIncomeAllocations, comparisonMonth), [savedMovements, monthlyIncomeAllocations, comparisonMonth]);
+  const comparisonMonthIncome = useMemo(() => monthlyIncomeTotal(savedMovements, comparisonMonth), [savedMovements, comparisonMonth]);
+  const comparisonMonthAssigned = useMemo(() => monthlyIncomeAllocations.filter((item) => item.month === comparisonMonth).reduce((sum, item) => sum + item.amount, 0), [monthlyIncomeAllocations, comparisonMonth]);
+  const comparisonMonthRemaining = comparisonMonthIncome - comparisonMonthAssigned;
+  const pendingMovements = savedMovements.filter((item) => item.amount < 0 && !item.category);
   const pendingCount = pendingMovements.length;
   const initials = (household?.displayName ?? "MC").split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "MC";
   const gasForecast = useMemo(() => calculateGasForecast(gasChanges), [gasChanges]);
@@ -295,12 +297,11 @@ function FinanceApp() {
     }
     const isIncome = movement.amount > 0;
     const categoryId = !isIncome && movement.category ? remoteCategories.find((item) => item.name === movement.category)?.id ?? null : null;
-    const allocatedTotal = (movement.allocations ?? []).reduce((sum, allocation) => sum + allocation.amount, 0);
     const values = {
       household_id: household.householdId,
       category_id: categoryId,
       kind: isIncome ? "income" : "expense",
-      status: isIncome ? (allocatedTotal >= Math.abs(movement.amount) ? "classified" : "pending") : (categoryId ? "classified" : "pending"),
+      status: isIncome ? "classified" : (categoryId ? "classified" : "pending"),
       amount: Math.abs(movement.amount),
       occurred_at: movement.occurredAt,
       description: movement.title,
@@ -313,16 +314,28 @@ function FinanceApp() {
       ? await supabase.from("transactions").update(values).eq("id", editingMovement.id).eq("household_id", household.householdId).select("id").single()
       : await supabase.from("transactions").insert(values).select("id").single();
     if (result.error) return Alert.alert("No se pudo guardar", result.error.message);
-    const transactionId = editingMovement?.id ?? result.data.id;
-    const allocationRows = isIncome ? (movement.allocations ?? []).map((allocation) => ({
-      category_id: remoteCategories.find((item) => item.name === allocation.category)?.id,
-      amount: allocation.amount,
-      month: allocation.month
-    })) : [];
-    if (allocationRows.some((allocation) => !allocation.category_id)) return Alert.alert("No se pudo distribuir", "Una de las categorías ya no está disponible.");
-    const { error: allocationError } = await supabase.rpc("replace_income_allocations", { target_transaction: transactionId, allocation_rows: allocationRows });
-    if (allocationError) return Alert.alert("Movimiento guardado", `El movimiento se guardó, pero no pudimos actualizar su distribución: ${allocationError.message}`);
     setMovementModalOpen(false);
+    await loadRemoteData();
+  };
+
+  const saveMonthlyIncomeAllocations = async (month: string, allocations: IncomeAllocation[]) => {
+    if (!supabase || !household) {
+      setMonthlyIncomeAllocations((current) => [...current.filter((item) => item.month !== month), ...allocations]);
+      setMonthlyAllocationModalOpen(false);
+      return;
+    }
+    const allocationRows = allocations.map((allocation) => ({
+      category_id: remoteCategories.find((item) => item.name === allocation.category)?.id,
+      amount: allocation.amount
+    }));
+    if (allocationRows.some((allocation) => !allocation.category_id)) return Alert.alert("No se pudo distribuir", "Una de las categorías ya no está disponible.");
+    const { error } = await supabase.rpc("replace_monthly_income_allocations", {
+      target_household: household.householdId,
+      target_month: month,
+      allocation_rows: allocationRows
+    });
+    if (error) return Alert.alert("No se pudo distribuir", error.message);
+    setMonthlyAllocationModalOpen(false);
     await loadRemoteData();
   };
 
@@ -431,6 +444,12 @@ function FinanceApp() {
                   <Text style={styles.monthNavigatorLabel}>{formatMonth(comparisonMonth)}</Text>
                   <TouchableOpacity accessibilityLabel="Mes siguiente" onPress={() => changeComparisonMonth(1)} style={styles.monthArrow}><Text style={styles.monthArrowText}>›</Text></TouchableOpacity>
                 </View>
+                <View style={styles.monthlyPoolSummary}>
+                  <View><Text style={styles.allocationSummaryLabel}>Ingresos del mes</Text><Text style={styles.allocationSummaryValue}>Bs {comparisonMonthIncome.toFixed(2)}</Text></View>
+                  <View><Text style={styles.allocationSummaryLabel}>Asignado</Text><Text style={styles.allocationSummaryValue}>Bs {comparisonMonthAssigned.toFixed(2)}</Text></View>
+                  <View><Text style={styles.allocationSummaryLabel}>{comparisonMonthRemaining < 0 ? "Excedido" : "Por asignar"}</Text><Text style={[styles.allocationSummaryValue, comparisonMonthRemaining < 0 && styles.allocationOver]}>Bs {Math.abs(comparisonMonthRemaining).toFixed(2)}</Text></View>
+                </View>
+                <TouchableOpacity disabled={allocationSyncUnavailable} onPress={() => setMonthlyAllocationModalOpen(true)} style={[styles.monthlyAllocationButton, allocationSyncUnavailable && styles.monthlyAllocationButtonDisabled]}><Text style={styles.monthlyAllocationButtonText}>Distribuir ingresos del mes</Text></TouchableOpacity>
                 {allocationSyncUnavailable ? <Text style={styles.comparisonEmpty}>Falta activar la distribución de ingresos en la base de datos.</Text> : monthlyCategoryComparison.length ? monthlyCategoryComparison.map((item, index) => (
                   <View key={item.category} style={[styles.comparisonRow, index < monthlyCategoryComparison.length - 1 && styles.movementBorder]}>
                     <View style={{ flex: 1 }}><Text style={styles.comparisonCategory}>{item.category}</Text><Text style={styles.comparisonNumbers}>Asignado Bs {item.income.toFixed(2)} · Gastado Bs {item.expense.toFixed(2)}</Text></View>
@@ -451,7 +470,7 @@ function FinanceApp() {
             <>
               <Text style={styles.pageTitle}>Movimientos</Text>
               <Text style={styles.pageSubtitle}>Todos los ingresos y gastos de la cuenta compartida.</Text>
-              {pendingCount > 0 && <TouchableOpacity style={styles.pendingBanner} onPress={() => openMovement(pendingMovements[0] ?? null)}><Text style={styles.pendingIcon}>!</Text><View style={{ flex: 1 }}><Text style={styles.pendingTitle}>{pendingCount} movimiento{pendingCount === 1 ? "" : "s"} pendiente{pendingCount === 1 ? "" : "s"}</Text><Text style={styles.pendingText}>Clasifica los gastos o distribuye los ingresos entre categorías.</Text></View></TouchableOpacity>}
+              {pendingCount > 0 && <TouchableOpacity style={styles.pendingBanner} onPress={() => openMovement(pendingMovements[0] ?? null)}><Text style={styles.pendingIcon}>!</Text><View style={{ flex: 1 }}><Text style={styles.pendingTitle}>{pendingCount} movimiento{pendingCount === 1 ? "" : "s"} pendiente{pendingCount === 1 ? "" : "s"}</Text><Text style={styles.pendingText}>Clasifica los gastos que aún no tienen categoría.</Text></View></TouchableOpacity>}
               <View style={styles.chips}>{([['all', 'Todos'], ['income', 'Ingresos'], ['expense', 'Gastos']] as const).map(([key, label]) => <TouchableOpacity key={key} onPress={() => setMovementFilter(key)} style={movementFilter === key ? styles.chipActive : styles.chip}><Text style={movementFilter === key ? styles.chipActiveText : styles.chipText}>{label}</Text></TouchableOpacity>)}</View>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryFilters}>
                 <TouchableOpacity onPress={() => setCategoryFilter(null)} style={!categoryFilter ? styles.pickerChipActive : styles.pickerChip}><Text style={!categoryFilter ? styles.pickerChipTextActive : styles.pickerChipText}>Todas las categorías</Text></TouchableOpacity>
@@ -555,10 +574,18 @@ function FinanceApp() {
           visible={movementModalOpen}
           movement={editingMovement}
           categories={categories}
-          allocationSyncUnavailable={allocationSyncUnavailable}
           onClose={() => setMovementModalOpen(false)}
           onSave={saveMovement}
           onDelete={editingMovement ? () => deleteMovement(editingMovement) : undefined}
+        />
+        <MonthlyIncomeAllocationEditor
+          visible={monthlyAllocationModalOpen}
+          month={comparisonMonth}
+          totalIncome={comparisonMonthIncome}
+          categories={categories}
+          allocations={monthlyIncomeAllocations.filter((item) => item.month === comparisonMonth)}
+          onClose={() => setMonthlyAllocationModalOpen(false)}
+          onSave={saveMonthlyIncomeAllocations}
         />
         <CategoryEditor visible={categoryModalOpen} onClose={() => setCategoryModalOpen(false)} onSave={createCategory} />
         <GasChangeEditor
@@ -587,9 +614,8 @@ export default function App() {
 function MovementList({ items, onSelect }: { items: Movement[]; onSelect: (movement: Movement) => void }) {
   return <View style={styles.movementCard}>{items.map((item, index) => {
     const isIncome = item.amount > 0;
-    const allocations = item.allocations ?? [];
-    const isPending = isIncome ? allocations.reduce((sum, allocation) => sum + allocation.amount, 0) < item.amount : !item.category;
-    const tagLabel = isIncome ? (allocations.length ? `${allocations.length} categoría${allocations.length === 1 ? "" : "s"}` : "Distribuir ingreso") : (item.category ?? "Clasificar");
+    const isPending = !isIncome && !item.category;
+    const tagLabel = isIncome ? "Ingreso" : (item.category ?? "Clasificar");
     return <TouchableOpacity key={item.id} onPress={() => onSelect(item)} style={[styles.movementRow, index < items.length - 1 && styles.movementBorder]}>
       <View style={styles.dateBox}><Text style={styles.dateDay}>{String(new Date(item.occurredAt).getDate()).padStart(2, "0")}</Text><Text style={styles.dateMonth}>{new Date(item.occurredAt).toLocaleDateString("es-BO", { month: "short" }).replace(".", "").toUpperCase()}</Text></View>
       <View style={{ flex: 1 }}><Text style={styles.movementTitle}>{item.title}</Text><Text style={styles.movementDetail}>{item.detail}</Text><View style={[styles.tag, isPending && styles.tagPending]}><Text style={[styles.tagText, isPending && styles.tagPendingText]}>{tagLabel}</Text></View></View>
@@ -672,16 +698,55 @@ function MonthPicker({ visible, value, onClose, onSelect }: { visible: boolean; 
   </Modal>;
 }
 
-function MovementEditor({ visible, movement, categories, allocationSyncUnavailable, onClose, onSave, onDelete }: { visible: boolean; movement: Movement | null; categories: string[]; allocationSyncUnavailable: boolean; onClose: () => void; onSave: (movement: Movement) => void; onDelete?: () => void }) {
+function MonthlyIncomeAllocationEditor({ visible, month, totalIncome, categories, allocations, onClose, onSave }: { visible: boolean; month: string; totalIncome: number; categories: string[]; allocations: IncomeAllocation[]; onClose: () => void; onSave: (month: string, allocations: IncomeAllocation[]) => void }) {
+  const [allocationAmounts, setAllocationAmounts] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (visible) setAllocationAmounts(Object.fromEntries(allocations.map((allocation) => [allocation.category, String(allocation.amount)])));
+  }, [visible, month, allocations]);
+
+  const allocatedTotal = Object.values(allocationAmounts).reduce((sum, value) => {
+    const parsed = Number(value.replace(",", "."));
+    return sum + (Number.isFinite(parsed) ? parsed : 0);
+  }, 0);
+  const remaining = totalIncome - allocatedTotal;
+
+  const save = () => {
+    const entries = Object.entries(allocationAmounts);
+    if (entries.some(([, value]) => !Number.isFinite(Number(value.replace(",", "."))) || Number(value.replace(",", ".")) <= 0)) return Alert.alert("Revisa la distribución", "Cada categoría agregada debe tener un importe mayor a cero, o puedes quitarla con la ×.");
+    if (allocatedTotal > totalIncome) return Alert.alert("Distribución excedida", "La suma asignada no puede superar el total de ingresos del mes.");
+    onSave(month, entries.map(([category, amount]) => ({ category, amount: Number(amount.replace(",", ".")), month })));
+  };
+
+  return <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+    <SafeAreaView style={styles.modalSafe}><ScrollView contentContainerStyle={styles.modalContent}>
+      <View style={styles.modalHeader}><TouchableOpacity onPress={onClose}><Text style={styles.modalCancel}>Cancelar</Text></TouchableOpacity><Text style={styles.modalTitle}>Distribuir ingresos</Text><TouchableOpacity onPress={save}><Text style={styles.modalSave}>Guardar</Text></TouchableOpacity></View>
+      <Text style={styles.monthlyAllocationTitle}>{formatMonth(month)}</Text>
+      <Text style={styles.allocationHelp}>Se sumaron todos los ingresos registrados en este mes. Distribuye ese total entre las categorías que necesites.</Text>
+      <View style={styles.allocationSummary}>
+        <View><Text style={styles.allocationSummaryLabel}>Ingresos</Text><Text style={styles.allocationSummaryValue}>Bs {totalIncome.toFixed(2)}</Text></View>
+        <View><Text style={styles.allocationSummaryLabel}>Asignado</Text><Text style={styles.allocationSummaryValue}>Bs {allocatedTotal.toFixed(2)}</Text></View>
+        <View><Text style={styles.allocationSummaryLabel}>{remaining < 0 ? "Excedido" : "Por asignar"}</Text><Text style={[styles.allocationSummaryValue, remaining < 0 && styles.allocationOver]}>Bs {Math.abs(remaining).toFixed(2)}</Text></View>
+      </View>
+      {Object.entries(allocationAmounts).map(([allocationCategory, allocationAmount]) => <View key={allocationCategory} style={styles.allocationRow}>
+        <Text style={styles.allocationCategory}>{allocationCategory}</Text>
+        <Text style={styles.allocationCurrency}>Bs</Text>
+        <TextInput value={allocationAmount} onChangeText={(value) => setAllocationAmounts((current) => ({ ...current, [allocationCategory]: value }))} keyboardType="decimal-pad" placeholder="0,00" style={styles.allocationInput} />
+        <TouchableOpacity accessibilityLabel={`Quitar ${allocationCategory}`} onPress={() => setAllocationAmounts((current) => Object.fromEntries(Object.entries(current).filter(([name]) => name !== allocationCategory)))} style={styles.allocationRemove}><Text style={styles.allocationRemoveText}>×</Text></TouchableOpacity>
+      </View>)}
+      {categories.some((item) => !(item in allocationAmounts)) && <><Text style={styles.allocationAddLabel}>AGREGAR CATEGORÍA</Text><View style={styles.categoryPicker}>{categories.filter((item) => !(item in allocationAmounts)).map((item) => <TouchableOpacity key={item} onPress={() => setAllocationAmounts((current) => ({ ...current, [item]: "" }))} style={styles.pickerChip}><Text style={styles.pickerChipText}>＋ {item}</Text></TouchableOpacity>)}</View></>}
+      {!totalIncome && <Text style={styles.noIncomeWarning}>Todavía no hay ingresos registrados en este mes.</Text>}
+    </ScrollView></SafeAreaView>
+  </Modal>;
+}
+
+function MovementEditor({ visible, movement, categories, onClose, onSave, onDelete }: { visible: boolean; movement: Movement | null; categories: string[]; onClose: () => void; onSave: (movement: Movement) => void; onDelete?: () => void }) {
   const [kind, setKind] = useState<"income" | "expense">("expense");
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState<string | null>(null);
   const [occurredDate, setOccurredDate] = useState(toIsoDate(new Date()));
   const [calendarOpen, setCalendarOpen] = useState(false);
-  const [allocationMonth, setAllocationMonth] = useState(monthKey());
-  const [allocationAmounts, setAllocationAmounts] = useState<Record<string, string>>({});
-  const [monthPickerOpen, setMonthPickerOpen] = useState(false);
 
   useEffect(() => {
     setKind(movement?.amount && movement.amount > 0 ? "income" : "expense");
@@ -689,16 +754,7 @@ function MovementEditor({ visible, movement, categories, allocationSyncUnavailab
     setDescription(movement?.title ?? "");
     setCategory(movement?.category ?? null);
     setOccurredDate(movement ? toIsoDate(new Date(movement.occurredAt)) : toIsoDate(new Date()));
-    setAllocationMonth(movement?.allocations?.[0]?.month ?? monthKey(movement ? new Date(movement.occurredAt) : new Date()));
-    setAllocationAmounts(Object.fromEntries((movement?.allocations ?? []).map((allocation) => [allocation.category, String(allocation.amount)])));
   }, [movement, visible]);
-
-  const allocatedTotal = Object.values(allocationAmounts).reduce((sum, value) => {
-    const parsed = Number(value.replace(",", "."));
-    return sum + (Number.isFinite(parsed) ? parsed : 0);
-  }, 0);
-  const numericAmountPreview = Number(amount.replace(",", ".")) || 0;
-  const remainingToAllocate = numericAmountPreview - allocatedTotal;
 
   const save = () => {
     const numericAmount = Number(amount.replace(",", "."));
@@ -706,9 +762,6 @@ function MovementEditor({ visible, movement, categories, allocationSyncUnavailab
       Alert.alert("Faltan datos", "Ingresa una descripción y un importe válido.");
       return;
     }
-    const allocationEntries = Object.entries(allocationAmounts);
-    if (kind === "income" && allocationEntries.some(([, value]) => !Number.isFinite(Number(value.replace(",", "."))) || Number(value.replace(",", ".")) <= 0)) return Alert.alert("Revisa la distribución", "Cada categoría agregada debe tener un importe mayor a cero, o puedes quitarla con la ×.");
-    if (kind === "income" && allocatedTotal > numericAmount) return Alert.alert("Distribución excedida", "La suma asignada a las categorías no puede superar el importe del ingreso.");
     const dateParts = occurredDate.split("-").map(Number);
     const occurredAt = movement ? new Date(movement.occurredAt) : new Date();
     occurredAt.setFullYear(dateParts[0]!, dateParts[1]! - 1, dateParts[2]!);
@@ -721,8 +774,7 @@ function MovementEditor({ visible, movement, categories, allocationSyncUnavailab
       category: kind === "income" ? null : category,
       color: movement?.color ?? "#6D5EF7",
       day: String(dateParts[2]).padStart(2, "0"),
-      occurredAt: occurredAt.toISOString(),
-      allocations: kind === "income" ? allocationEntries.map(([allocationCategory, allocationAmount]) => ({ category: allocationCategory, amount: Number(allocationAmount.replace(",", ".")), month: allocationMonth })) : []
+      occurredAt: occurredAt.toISOString()
     });
   };
 
@@ -742,27 +794,9 @@ function MovementEditor({ visible, movement, categories, allocationSyncUnavailab
       {kind === "expense" ? <>
         <Text style={styles.inputLabel}>CATEGORÍA</Text><View style={styles.categoryPicker}>{categories.map((item) => <TouchableOpacity key={item} onPress={() => setCategory(item)} style={[styles.pickerChip, category === item && styles.pickerChipActive]}><Text style={[styles.pickerChipText, category === item && styles.pickerChipTextActive]}>{item}</Text></TouchableOpacity>)}</View>
         {movement && <TouchableOpacity onPress={() => setCategory(null)}><Text style={styles.clearCategory}>Dejar pendiente de clasificación</Text></TouchableOpacity>}
-      </> : <>
-        <Text style={styles.inputLabel}>DISTRIBUCIÓN DEL INGRESO</Text>
-        <Text style={styles.allocationHelp}>Reparte el ingreso entre las categorías que quieras. Puedes dejar una parte sin asignar y completarla después.</Text>
-        {allocationSyncUnavailable && <View style={styles.gasWarning}><Text style={styles.gasWarningTitle}>Falta activar esta función</Text><Text style={styles.gasWarningText}>La distribución todavía no está disponible en la base de datos.</Text></View>}
-        <TouchableOpacity accessibilityLabel="Seleccionar mes de la distribución" onPress={() => setMonthPickerOpen(true)} style={styles.allocationMonthButton}><View><Text style={styles.allocationMonthLabel}>MES AL QUE CORRESPONDE</Text><Text style={styles.allocationMonthValue}>{formatMonth(allocationMonth)}</Text></View><Text style={styles.datePickerChevron}>›</Text></TouchableOpacity>
-        <View style={styles.allocationSummary}>
-          <View><Text style={styles.allocationSummaryLabel}>Ingreso</Text><Text style={styles.allocationSummaryValue}>Bs {numericAmountPreview.toFixed(2)}</Text></View>
-          <View><Text style={styles.allocationSummaryLabel}>Asignado</Text><Text style={styles.allocationSummaryValue}>Bs {allocatedTotal.toFixed(2)}</Text></View>
-          <View><Text style={styles.allocationSummaryLabel}>{remainingToAllocate < 0 ? "Excedido" : "Por asignar"}</Text><Text style={[styles.allocationSummaryValue, remainingToAllocate < 0 && styles.allocationOver]} >Bs {Math.abs(remainingToAllocate).toFixed(2)}</Text></View>
-        </View>
-        {Object.entries(allocationAmounts).map(([allocationCategory, allocationAmount]) => <View key={allocationCategory} style={styles.allocationRow}>
-          <Text style={styles.allocationCategory}>{allocationCategory}</Text>
-          <Text style={styles.allocationCurrency}>Bs</Text>
-          <TextInput value={allocationAmount} onChangeText={(value) => setAllocationAmounts((current) => ({ ...current, [allocationCategory]: value }))} keyboardType="decimal-pad" placeholder="0,00" style={styles.allocationInput} />
-          <TouchableOpacity accessibilityLabel={`Quitar ${allocationCategory}`} onPress={() => setAllocationAmounts((current) => Object.fromEntries(Object.entries(current).filter(([name]) => name !== allocationCategory)))} style={styles.allocationRemove}><Text style={styles.allocationRemoveText}>×</Text></TouchableOpacity>
-        </View>)}
-        {categories.some((item) => !(item in allocationAmounts)) && <><Text style={styles.allocationAddLabel}>AGREGAR CATEGORÍA</Text><View style={styles.categoryPicker}>{categories.filter((item) => !(item in allocationAmounts)).map((item) => <TouchableOpacity key={item} onPress={() => setAllocationAmounts((current) => ({ ...current, [item]: "" }))} style={styles.pickerChip}><Text style={styles.pickerChipText}>＋ {item}</Text></TouchableOpacity>)}</View></>}
-      </>}
+      </> : <Text style={styles.incomePoolHint}>Este ingreso se sumará automáticamente a los ingresos del mes. La distribución por categorías se realiza desde el inicio.</Text>}
       {movement && onDelete && <TouchableOpacity onPress={onDelete} style={styles.deleteButton}><Text style={styles.deleteButtonText}>Eliminar movimiento</Text></TouchableOpacity>}
       <CalendarPicker visible={calendarOpen} value={occurredDate} onClose={() => setCalendarOpen(false)} onSelect={(value) => { setOccurredDate(value); setCalendarOpen(false); }} />
-      <MonthPicker visible={monthPickerOpen} value={allocationMonth} onClose={() => setMonthPickerOpen(false)} onSelect={(value) => { setAllocationMonth(value); setMonthPickerOpen(false); }} />
     </ScrollView></SafeAreaView>
   </Modal>;
 }
@@ -870,6 +904,7 @@ const styles = StyleSheet.create({
   sectionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 30, marginBottom: 12 }, sectionTitle: { fontSize: 18, fontWeight: "800", color: "#17203A" }, sectionHint: { fontSize: 12, color: "#8A91A3", marginTop: 3 }, filterButton: { paddingHorizontal: 13, paddingVertical: 8, backgroundColor: "#EAECF3", borderRadius: 14 }, filterText: { color: "#596074", fontSize: 12, fontWeight: "700" }, link: { color: "#6D5EF7", fontWeight: "700", fontSize: 12 },
   categoryCard: { backgroundColor: "white", borderRadius: 20, padding: 18 }, barTrack: { height: 12, flexDirection: "row", marginBottom: 16 }, barPart: { height: 12 }, categoryRow: { flexDirection: "row", alignItems: "center", paddingVertical: 8 }, categoryDot: { width: 9, height: 9, borderRadius: 5, marginRight: 10 }, categoryName: { flex: 1, color: "#343B50", fontWeight: "600" }, categoryPercent: { width: 40, color: "#9AA0B0", fontSize: 12 }, categoryValue: { width: 78, textAlign: "right", color: "#17203A", fontWeight: "700" },
   comparisonCard: { backgroundColor: "white", borderRadius: 20, padding: 16 }, monthNavigator: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", backgroundColor: "#F5F6FA", borderRadius: 15, padding: 6, marginBottom: 8 }, monthArrow: { width: 38, height: 34, borderRadius: 11, backgroundColor: "white", alignItems: "center", justifyContent: "center" }, monthArrowText: { color: "#5949E8", fontSize: 25, lineHeight: 27 }, monthNavigatorLabel: { color: "#232A3E", fontWeight: "900", fontSize: 14 }, comparisonRow: { flexDirection: "row", alignItems: "center", paddingVertical: 14, gap: 10 }, comparisonCategory: { color: "#232A3E", fontWeight: "900", fontSize: 14 }, comparisonNumbers: { color: "#8A91A3", fontSize: 10, marginTop: 4 }, comparisonBalance: { minWidth: 82, borderRadius: 12, paddingHorizontal: 9, paddingVertical: 7, alignItems: "flex-end" }, comparisonExceeded: { backgroundColor: "#FCECEE" }, comparisonAvailable: { backgroundColor: "#E4F7F0" }, comparisonBalanceText: { fontSize: 8, fontWeight: "900", textTransform: "uppercase" }, comparisonBalanceAmount: { fontSize: 11, fontWeight: "900", marginTop: 2 }, comparisonExceededText: { color: "#C94C59" }, comparisonAvailableText: { color: "#167B5C" }, comparisonEmpty: { color: "#8A91A3", textAlign: "center", lineHeight: 18, paddingVertical: 18 },
+  monthlyPoolSummary: { flexDirection: "row", justifyContent: "space-between", backgroundColor: "#17203A", borderRadius: 15, padding: 13, marginTop: 4 }, monthlyAllocationButton: { backgroundColor: "#6D5EF7", borderRadius: 14, paddingVertical: 12, alignItems: "center", marginTop: 10, marginBottom: 5 }, monthlyAllocationButtonDisabled: { opacity: 0.45 }, monthlyAllocationButtonText: { color: "white", fontWeight: "900", fontSize: 12 },
   movementCard: { backgroundColor: "white", borderRadius: 20, paddingHorizontal: 16 }, movementRow: { flexDirection: "row", alignItems: "center", paddingVertical: 16, gap: 12 }, movementBorder: { borderBottomWidth: 1, borderBottomColor: "#F0F1F5" }, dateBox: { width: 42, height: 48, borderRadius: 13, backgroundColor: "#F2F3F8", alignItems: "center", justifyContent: "center" }, dateDay: { fontSize: 16, fontWeight: "800", color: "#272E43" }, dateMonth: { fontSize: 8, letterSpacing: 0.8, color: "#9298A8", fontWeight: "700" }, movementTitle: { color: "#20273B", fontWeight: "700", fontSize: 14 }, movementDetail: { color: "#9298A8", fontSize: 10, marginTop: 2 }, tag: { alignSelf: "flex-start", marginTop: 6, backgroundColor: "#F0EDFF", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 }, tagText: { color: "#6D5EF7", fontSize: 9, fontWeight: "700" }, tagPending: { backgroundColor: "#FFF2D7" }, tagPendingText: { color: "#9B6811" }, amount: { color: "#D94E5D", fontSize: 13, fontWeight: "800" }, income: { color: "#15936C" },
   pageTitle: { fontSize: 30, fontWeight: "800", color: "#17203A", marginTop: 8 }, pageSubtitle: { color: "#7E8598", lineHeight: 20, marginTop: 6, marginBottom: 22 }, pendingBanner: { flexDirection: "row", backgroundColor: "#FFF5DE", padding: 14, borderRadius: 17, alignItems: "center", gap: 12, marginBottom: 16 }, pendingIcon: { width: 28, height: 28, borderRadius: 14, backgroundColor: "#E8A838", color: "white", textAlign: "center", lineHeight: 28, fontWeight: "900" }, pendingTitle: { color: "#6A4A12", fontWeight: "800" }, pendingText: { color: "#957240", fontSize: 11, marginTop: 2 }, chips: { flexDirection: "row", gap: 8, marginBottom: 14 }, categoryFilters: { gap: 8, paddingBottom: 14 }, chip: { backgroundColor: "#EAECF3", paddingHorizontal: 14, paddingVertical: 9, borderRadius: 16 }, chipActive: { backgroundColor: "#17203A", paddingHorizontal: 14, paddingVertical: 9, borderRadius: 16 }, chipText: { color: "#6C7385", fontWeight: "700", fontSize: 12 }, chipActiveText: { color: "white", fontWeight: "700", fontSize: 12 }, emptyText: { textAlign: "center", color: "#8A91A3", paddingVertical: 18 },
   primaryButton: { backgroundColor: "#6D5EF7", paddingVertical: 14, borderRadius: 16, alignItems: "center", marginBottom: 16 }, primaryButtonText: { color: "white", fontWeight: "800" }, manageCategoryRow: { flexDirection: "row", alignItems: "center", paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: "#F1F2F6" }, categoryIcon: { width: 38, height: 38, borderRadius: 12, alignItems: "center", justifyContent: "center", marginRight: 12 }, manageCategoryName: { flex: 1, fontWeight: "700", color: "#2D3448" }, chevron: { fontSize: 24, color: "#A3A8B5" },
@@ -880,6 +915,7 @@ const styles = StyleSheet.create({
   calendarBackdrop: { flex: 1, backgroundColor: "rgba(20,25,40,0.42)", justifyContent: "flex-end" }, calendarDismissArea: { flex: 1 }, calendarSheet: { backgroundColor: "#F8F9FC", borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 18, paddingTop: 10, paddingBottom: 30 }, calendarHandle: { width: 42, height: 5, borderRadius: 3, backgroundColor: "#D5D8E1", alignSelf: "center", marginBottom: 15 }, calendarHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 13 }, calendarMonth: { color: "#17203A", fontSize: 18, fontWeight: "900" }, calendarArrow: { width: 42, height: 42, borderRadius: 14, backgroundColor: "white", alignItems: "center", justifyContent: "center" }, calendarArrowText: { color: "#5949E8", fontSize: 29, lineHeight: 31 }, calendarWeekRow: { flexDirection: "row", marginBottom: 5 }, calendarWeekDay: { width: "14.285%", textAlign: "center", color: "#9AA0AF", fontSize: 10, fontWeight: "900" }, calendarGrid: { flexDirection: "row", flexWrap: "wrap" }, calendarDayCell: { width: "14.285%", height: 44, alignItems: "center", justifyContent: "center" }, calendarDayCircle: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" }, calendarToday: { borderWidth: 1, borderColor: "#6D5EF7" }, calendarSelected: { backgroundColor: "#6D5EF7", borderColor: "#6D5EF7" }, calendarDayText: { color: "#30374B", fontWeight: "700", fontSize: 13 }, calendarSelectedText: { color: "white", fontWeight: "900" }, calendarTodayButton: { marginTop: 12, backgroundColor: "#EAE7FF", borderRadius: 14, paddingVertical: 12, alignItems: "center" }, calendarTodayButtonText: { color: "#5949E8", fontWeight: "900" },
   monthGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 }, monthCell: { width: "31%", backgroundColor: "white", borderRadius: 14, paddingVertical: 14, alignItems: "center", borderWidth: 1, borderColor: "#EFF0F4" }, monthCellSelected: { backgroundColor: "#6D5EF7", borderColor: "#6D5EF7" }, monthCellText: { color: "#596074", fontWeight: "800", fontSize: 12 }, monthCellTextSelected: { color: "white" },
   allocationHelp: { color: "#7E8598", fontSize: 12, lineHeight: 18, marginBottom: 12 }, allocationMonthButton: { backgroundColor: "white", borderRadius: 16, borderWidth: 1, borderColor: "#E7E9F0", paddingHorizontal: 15, paddingVertical: 13, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }, allocationMonthLabel: { color: "#8A91A3", fontSize: 9, letterSpacing: 0.9, fontWeight: "900" }, allocationMonthValue: { color: "#232A3E", fontSize: 16, fontWeight: "900", marginTop: 4 }, allocationSummary: { flexDirection: "row", justifyContent: "space-between", backgroundColor: "#17203A", borderRadius: 16, padding: 14, marginTop: 12 }, allocationSummaryLabel: { color: "#A9B1C7", fontSize: 9, fontWeight: "800" }, allocationSummaryValue: { color: "white", fontSize: 12, fontWeight: "900", marginTop: 4 }, allocationOver: { color: "#FF9A9A" }, allocationRow: { flexDirection: "row", alignItems: "center", backgroundColor: "white", borderRadius: 14, padding: 10, marginTop: 9, borderWidth: 1, borderColor: "#E7E9F0" }, allocationCategory: { flex: 1, color: "#30374B", fontWeight: "800", fontSize: 12 }, allocationCurrency: { color: "#8A91A3", fontSize: 11, marginRight: 5 }, allocationInput: { width: 74, backgroundColor: "#F5F6FA", borderRadius: 10, paddingHorizontal: 9, paddingVertical: 8, color: "#17203A", fontWeight: "800", textAlign: "right" }, allocationRemove: { width: 30, height: 30, alignItems: "center", justifyContent: "center", marginLeft: 5 }, allocationRemoveText: { color: "#C94C59", fontSize: 22, lineHeight: 24 }, allocationAddLabel: { color: "#8A91A3", fontSize: 9, letterSpacing: 1, fontWeight: "900", marginTop: 16, marginBottom: 8 },
+  monthlyAllocationTitle: { color: "#17203A", fontSize: 26, fontWeight: "900", marginBottom: 7 }, noIncomeWarning: { color: "#9B6811", backgroundColor: "#FFF2D7", borderRadius: 14, padding: 13, textAlign: "center", fontWeight: "700", marginTop: 18 }, incomePoolHint: { color: "#496357", backgroundColor: "#E4F7F0", borderRadius: 14, padding: 14, lineHeight: 19, fontSize: 12, marginTop: 20 },
   dialogBackdrop: { flex: 1, backgroundColor: "rgba(20,25,40,0.45)", justifyContent: "center", padding: 24 }, dialog: { backgroundColor: "#F8F9FC", borderRadius: 22, padding: 20 }, dialogTitle: { fontSize: 20, fontWeight: "800", color: "#17203A", marginBottom: 18 }, dialogActions: { flexDirection: "row", justifyContent: "flex-end", gap: 24, marginTop: 20 },
   profileSafe: { flex: 1, backgroundColor: "#F6F7FB" }, profileContent: { padding: 24, paddingBottom: 50 }, profileHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" }, profileTitle: { fontSize: 28, fontWeight: "900", color: "#17203A" }, profileAvatar: { alignSelf: "center", width: 88, height: 88, borderRadius: 28, backgroundColor: "#EAE7FF", alignItems: "center", justifyContent: "center", marginTop: 34 }, profileAvatarText: { color: "#5949E8", fontSize: 28, fontWeight: "900" }, profileName: { textAlign: "center", color: "#17203A", fontSize: 22, fontWeight: "900", marginTop: 16 }, profileEmail: { textAlign: "center", color: "#7E8598", marginTop: 5 }, profileCard: { backgroundColor: "white", borderRadius: 22, padding: 20, marginTop: 30 }, profileLabel: { color: "#8A91A3", fontSize: 10, letterSpacing: 1.2, fontWeight: "800" }, profileValue: { color: "#232A3E", fontSize: 18, fontWeight: "800", marginTop: 7 }, profileDivider: { height: 1, backgroundColor: "#ECEEF3", marginVertical: 20 }, inviteCode: { color: "#6D5EF7", fontSize: 27, letterSpacing: 4, fontWeight: "900", marginTop: 8 }, profileHelp: { color: "#8A91A3", fontSize: 12, lineHeight: 18, marginTop: 12 },
   gasForecastCard: { backgroundColor: "#17203A", borderRadius: 24, padding: 22, marginBottom: 16 }, gasForecastEyebrow: { color: "#A9B1C7", fontSize: 10, letterSpacing: 1.2, fontWeight: "900" }, gasForecastDate: { color: "white", fontSize: 25, fontWeight: "900", marginTop: 9 }, gasForecastCaption: { color: "#C8CDDA", fontSize: 12, lineHeight: 18, marginTop: 8 },

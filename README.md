@@ -9,7 +9,7 @@ Aplicacion movil privada para registrar, clasificar y analizar los movimientos d
 - Modelo Supabase multiusuario con seguridad por hogar.
 - Datos bancarios sensibles reducidos a los ultimos cuatro digitos.
 - Registro independiente de cambios de garrafa, fechas programadas y pronostico basado en el promedio de los ultimos intervalos reales.
-- Distribucion mensual de cada ingreso entre varias categorias y comparacion contra los gastos reales.
+- Bolsa mensual que suma todos los ingresos, permite distribuir el total entre varias categorias y compararlo contra los gastos reales.
 
 ## Desarrollo local
 
