@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit",
     "test:parser": "node --experimental-strip-types src/bank/bmscParser.test.ts",
     "test:gas": "node --experimental-strip-types src/gas/gasForecast.test.ts",
+    "test:budget": "node --experimental-strip-types src/budget/categoryComparison.test.ts",
     "test:supabase": "node --experimental-strip-types src/lib/supabase.test.ts"
   },
   "dependencies": {
