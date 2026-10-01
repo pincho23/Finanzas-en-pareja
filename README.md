@@ -9,6 +9,7 @@ Aplicacion movil privada para registrar, clasificar y analizar los movimientos d
 - Modelo Supabase multiusuario con seguridad por hogar.
 - Datos bancarios sensibles reducidos a los ultimos cuatro digitos.
 - Registro independiente de cambios de garrafa, fechas programadas y pronostico basado en el promedio de los ultimos intervalos reales.
+- Distribucion mensual de cada ingreso entre varias categorias y comparacion contra los gastos reales.
 
 ## Desarrollo local
 
@@ -17,6 +18,7 @@ Aplicacion movil privada para registrar, clasificar y analizar los movimientos d
 3. Ejecutar `npm start` y abrir el codigo QR con Expo Go.
 4. Ejecutar `npm run test:parser` para validar los formatos bancarios.
 5. Ejecutar `npm run test:gas` para validar el calculo del pronostico de la garrafa.
+6. Ejecutar `npm run test:budget` para validar la comparacion mensual por categoria.
 
 ## Migraciones de Supabase
 
