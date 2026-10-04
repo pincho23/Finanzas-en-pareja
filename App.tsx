@@ -339,18 +339,15 @@ function FinanceApp() {
     await loadRemoteData();
   };
 
-  const deleteMovement = (movement: Movement) => Alert.alert(
-    "Eliminar movimiento",
-    `¿Quieres eliminar “${movement.title}”? Esta acción no se puede deshacer.`,
-    [{ text: "Cancelar", style: "cancel" }, { text: "Eliminar", style: "destructive", onPress: async () => {
-      if (supabase && household && movement.source === "remote") {
-        const { error } = await supabase.from("transactions").delete().eq("id", movement.id).eq("household_id", household.householdId);
-        if (error) return Alert.alert("No se pudo eliminar", error.message);
-      }
-      setSavedMovements((current) => current.filter((item) => item.id !== movement.id));
-      setMovementModalOpen(false);
-    } }]
-  );
+  const deleteMovement = async (movement: Movement) => {
+    if (supabase && household && movement.source === "remote") {
+      const { data, error } = await supabase.from("transactions").delete().eq("id", movement.id).eq("household_id", household.householdId).select("id").maybeSingle();
+      if (error) return Alert.alert("No se pudo eliminar", error.message);
+      if (!data) return Alert.alert("No se pudo eliminar", "El movimiento no fue encontrado o ya no tienes acceso para modificarlo.");
+    }
+    setSavedMovements((current) => current.filter((item) => item.id !== movement.id));
+    setMovementModalOpen(false);
+  };
 
   const deleteCategory = (name: string) => Alert.alert(
     "Eliminar categoría",
@@ -747,6 +744,7 @@ function MovementEditor({ visible, movement, categories, onClose, onSave, onDele
   const [category, setCategory] = useState<string | null>(null);
   const [occurredDate, setOccurredDate] = useState(toIsoDate(new Date()));
   const [calendarOpen, setCalendarOpen] = useState(false);
+  const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
 
   useEffect(() => {
     setKind(movement?.amount && movement.amount > 0 ? "income" : "expense");
@@ -754,6 +752,7 @@ function MovementEditor({ visible, movement, categories, onClose, onSave, onDele
     setDescription(movement?.title ?? "");
     setCategory(movement?.category ?? null);
     setOccurredDate(movement ? toIsoDate(new Date(movement.occurredAt)) : toIsoDate(new Date()));
+    setDeleteConfirmationOpen(false);
   }, [movement, visible]);
 
   const save = () => {
@@ -795,8 +794,20 @@ function MovementEditor({ visible, movement, categories, onClose, onSave, onDele
         <Text style={styles.inputLabel}>CATEGORÍA</Text><View style={styles.categoryPicker}>{categories.map((item) => <TouchableOpacity key={item} onPress={() => setCategory(item)} style={[styles.pickerChip, category === item && styles.pickerChipActive]}><Text style={[styles.pickerChipText, category === item && styles.pickerChipTextActive]}>{item}</Text></TouchableOpacity>)}</View>
         {movement && <TouchableOpacity onPress={() => setCategory(null)}><Text style={styles.clearCategory}>Dejar pendiente de clasificación</Text></TouchableOpacity>}
       </> : <Text style={styles.incomePoolHint}>Este ingreso se sumará automáticamente a los ingresos del mes. La distribución por categorías se realiza desde el inicio.</Text>}
-      {movement && onDelete && <TouchableOpacity onPress={onDelete} style={styles.deleteButton}><Text style={styles.deleteButtonText}>Eliminar movimiento</Text></TouchableOpacity>}
+      {movement && onDelete && <TouchableOpacity onPress={() => setDeleteConfirmationOpen(true)} style={styles.deleteButton}><Text style={styles.deleteButtonText}>Eliminar movimiento</Text></TouchableOpacity>}
       <CalendarPicker visible={calendarOpen} value={occurredDate} onClose={() => setCalendarOpen(false)} onSelect={(value) => { setOccurredDate(value); setCalendarOpen(false); }} />
+      <Modal visible={deleteConfirmationOpen} transparent animationType="fade" onRequestClose={() => setDeleteConfirmationOpen(false)}>
+        <View style={styles.dialogBackdrop}>
+          <View style={styles.dialog}>
+            <Text style={styles.dialogTitle}>Eliminar movimiento</Text>
+            <Text style={styles.dialogText}>¿Quieres eliminar “{movement?.title}” por Bs {Math.abs(movement?.amount ?? 0).toFixed(2)}? Esta acción no se puede deshacer.</Text>
+            <View style={styles.dialogActions}>
+              <TouchableOpacity onPress={() => setDeleteConfirmationOpen(false)} style={styles.dialogCancelButton}><Text style={styles.dialogCancelText}>Cancelar</Text></TouchableOpacity>
+              <TouchableOpacity onPress={() => { setDeleteConfirmationOpen(false); onDelete?.(); }} style={styles.dialogDeleteButton}><Text style={styles.dialogDeleteText}>Eliminar</Text></TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScrollView></SafeAreaView>
   </Modal>;
 }
@@ -916,7 +927,7 @@ const styles = StyleSheet.create({
   monthGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 }, monthCell: { width: "31%", backgroundColor: "white", borderRadius: 14, paddingVertical: 14, alignItems: "center", borderWidth: 1, borderColor: "#EFF0F4" }, monthCellSelected: { backgroundColor: "#6D5EF7", borderColor: "#6D5EF7" }, monthCellText: { color: "#596074", fontWeight: "800", fontSize: 12 }, monthCellTextSelected: { color: "white" },
   allocationHelp: { color: "#7E8598", fontSize: 12, lineHeight: 18, marginBottom: 12 }, allocationMonthButton: { backgroundColor: "white", borderRadius: 16, borderWidth: 1, borderColor: "#E7E9F0", paddingHorizontal: 15, paddingVertical: 13, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }, allocationMonthLabel: { color: "#8A91A3", fontSize: 9, letterSpacing: 0.9, fontWeight: "900" }, allocationMonthValue: { color: "#232A3E", fontSize: 16, fontWeight: "900", marginTop: 4 }, allocationSummary: { flexDirection: "row", justifyContent: "space-between", backgroundColor: "#17203A", borderRadius: 16, padding: 14, marginTop: 12 }, allocationSummaryLabel: { color: "#A9B1C7", fontSize: 9, fontWeight: "800" }, allocationSummaryValue: { color: "white", fontSize: 12, fontWeight: "900", marginTop: 4 }, allocationOver: { color: "#FF9A9A" }, allocationRow: { flexDirection: "row", alignItems: "center", backgroundColor: "white", borderRadius: 14, padding: 10, marginTop: 9, borderWidth: 1, borderColor: "#E7E9F0" }, allocationCategory: { flex: 1, color: "#30374B", fontWeight: "800", fontSize: 12 }, allocationCurrency: { color: "#8A91A3", fontSize: 11, marginRight: 5 }, allocationInput: { width: 74, backgroundColor: "#F5F6FA", borderRadius: 10, paddingHorizontal: 9, paddingVertical: 8, color: "#17203A", fontWeight: "800", textAlign: "right" }, allocationRemove: { width: 30, height: 30, alignItems: "center", justifyContent: "center", marginLeft: 5 }, allocationRemoveText: { color: "#C94C59", fontSize: 22, lineHeight: 24 }, allocationAddLabel: { color: "#8A91A3", fontSize: 9, letterSpacing: 1, fontWeight: "900", marginTop: 16, marginBottom: 8 },
   monthlyAllocationTitle: { color: "#17203A", fontSize: 26, fontWeight: "900", marginBottom: 7 }, noIncomeWarning: { color: "#9B6811", backgroundColor: "#FFF2D7", borderRadius: 14, padding: 13, textAlign: "center", fontWeight: "700", marginTop: 18 }, incomePoolHint: { color: "#496357", backgroundColor: "#E4F7F0", borderRadius: 14, padding: 14, lineHeight: 19, fontSize: 12, marginTop: 20 },
-  dialogBackdrop: { flex: 1, backgroundColor: "rgba(20,25,40,0.45)", justifyContent: "center", padding: 24 }, dialog: { backgroundColor: "#F8F9FC", borderRadius: 22, padding: 20 }, dialogTitle: { fontSize: 20, fontWeight: "800", color: "#17203A", marginBottom: 18 }, dialogActions: { flexDirection: "row", justifyContent: "flex-end", gap: 24, marginTop: 20 },
+  dialogBackdrop: { flex: 1, backgroundColor: "rgba(20,25,40,0.45)", justifyContent: "center", padding: 24 }, dialog: { backgroundColor: "#F8F9FC", borderRadius: 22, padding: 20 }, dialogTitle: { fontSize: 20, fontWeight: "800", color: "#17203A", marginBottom: 12 }, dialogText: { color: "#6C7385", fontSize: 14, lineHeight: 21 }, dialogActions: { flexDirection: "row", justifyContent: "flex-end", gap: 10, marginTop: 20 }, dialogCancelButton: { paddingHorizontal: 16, paddingVertical: 11, borderRadius: 12, backgroundColor: "#EAECF3" }, dialogCancelText: { color: "#596074", fontWeight: "800" }, dialogDeleteButton: { paddingHorizontal: 16, paddingVertical: 11, borderRadius: 12, backgroundColor: "#D94E5D" }, dialogDeleteText: { color: "white", fontWeight: "900" },
   profileSafe: { flex: 1, backgroundColor: "#F6F7FB" }, profileContent: { padding: 24, paddingBottom: 50 }, profileHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" }, profileTitle: { fontSize: 28, fontWeight: "900", color: "#17203A" }, profileAvatar: { alignSelf: "center", width: 88, height: 88, borderRadius: 28, backgroundColor: "#EAE7FF", alignItems: "center", justifyContent: "center", marginTop: 34 }, profileAvatarText: { color: "#5949E8", fontSize: 28, fontWeight: "900" }, profileName: { textAlign: "center", color: "#17203A", fontSize: 22, fontWeight: "900", marginTop: 16 }, profileEmail: { textAlign: "center", color: "#7E8598", marginTop: 5 }, profileCard: { backgroundColor: "white", borderRadius: 22, padding: 20, marginTop: 30 }, profileLabel: { color: "#8A91A3", fontSize: 10, letterSpacing: 1.2, fontWeight: "800" }, profileValue: { color: "#232A3E", fontSize: 18, fontWeight: "800", marginTop: 7 }, profileDivider: { height: 1, backgroundColor: "#ECEEF3", marginVertical: 20 }, inviteCode: { color: "#6D5EF7", fontSize: 27, letterSpacing: 4, fontWeight: "900", marginTop: 8 }, profileHelp: { color: "#8A91A3", fontSize: 12, lineHeight: 18, marginTop: 12 },
   gasForecastCard: { backgroundColor: "#17203A", borderRadius: 24, padding: 22, marginBottom: 16 }, gasForecastEyebrow: { color: "#A9B1C7", fontSize: 10, letterSpacing: 1.2, fontWeight: "900" }, gasForecastDate: { color: "white", fontSize: 25, fontWeight: "900", marginTop: 9 }, gasForecastCaption: { color: "#C8CDDA", fontSize: 12, lineHeight: 18, marginTop: 8 },
   gasHistoryCard: { backgroundColor: "white", borderRadius: 20, paddingHorizontal: 16 }, gasHistoryRow: { flexDirection: "row", alignItems: "center", paddingVertical: 15, gap: 11 }, gasIcon: { width: 38, height: 38, borderRadius: 13, alignItems: "center", justifyContent: "center", backgroundColor: "#DFF6EE" }, gasIconPlanned: { backgroundColor: "#EEEAFE" }, gasIconText: { color: "#4E46B9", fontWeight: "900" }, gasHistoryDate: { color: "#232A3E", fontWeight: "800", fontSize: 14 }, gasHistoryNote: { color: "#8A91A3", fontSize: 11, marginTop: 3 }, gasKindTag: { backgroundColor: "#DFF6EE", borderRadius: 9, paddingHorizontal: 8, paddingVertical: 5 }, gasKindTagPlanned: { backgroundColor: "#EEEAFE" }, gasKindText: { color: "#167B5C", fontSize: 9, fontWeight: "800" }, gasKindTextPlanned: { color: "#5B50CA" },
