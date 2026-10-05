@@ -35,6 +35,7 @@ type Movement = {
 
 type RemoteCategory = { id: string; name: string };
 type IncomeAllocation = { id?: string; category: string; categoryId?: string | null; amount: number; month: string };
+type DashboardPeriod = "Este mes" | "3 meses" | "Año" | "Personalizado";
 
 const movements: Movement[] = [
   { id: "1", title: "Farmacorp", detail: "Transferencia ACH · Hoy, 19:23", amount: -130.95, category: "Salud", color: "#6D5EF7", day: "03", occurredAt: "2026-09-03T19:23:12-04:00" },
@@ -75,7 +76,10 @@ const formatMonth = (value: string) => {
 function FinanceApp() {
   const household = useHousehold();
   const [activeTab, setActiveTab] = useState<"inicio" | "movimientos" | "garrafa" | "categorias" | "ajustes">("inicio");
-  const [period, setPeriod] = useState("Este mes");
+  const [period, setPeriod] = useState<DashboardPeriod>("Este mes");
+  const [customStartMonth, setCustomStartMonth] = useState(monthKey());
+  const [customEndMonth, setCustomEndMonth] = useState(monthKey());
+  const [periodPickerOpen, setPeriodPickerOpen] = useState(false);
   const [savedMovements, setSavedMovements] = useState<Movement[]>(movements);
   const [categories, setCategories] = useState(initialCategories);
   const [movementFilter, setMovementFilter] = useState<"all" | "income" | "expense">("all");
@@ -200,12 +204,26 @@ function FinanceApp() {
   const periodMovements = useMemo(() => {
     const now = new Date();
     const start = new Date(now);
+    let end = now;
     if (period === "Este mes") start.setDate(1);
     else if (period === "3 meses") start.setMonth(now.getMonth() - 2, 1);
-    else start.setMonth(0, 1);
+    else if (period === "Año") start.setMonth(0, 1);
+    else {
+      const selectedStart = dateAtNoon(customStartMonth);
+      const selectedEnd = dateAtNoon(customEndMonth);
+      start.setFullYear(selectedStart.getFullYear(), selectedStart.getMonth(), 1);
+      end = new Date(selectedEnd.getFullYear(), selectedEnd.getMonth() + 1, 1);
+    }
     start.setHours(0, 0, 0, 0);
-    return savedMovements.filter((item) => new Date(item.occurredAt) >= start && new Date(item.occurredAt) <= now);
-  }, [savedMovements, period]);
+    return savedMovements.filter((item) => {
+      const occurredAt = new Date(item.occurredAt);
+      return occurredAt >= start && (period === "Personalizado" ? occurredAt < end : occurredAt <= end);
+    });
+  }, [savedMovements, period, customStartMonth, customEndMonth]);
+  const periodLabel = useMemo(() => {
+    if (period !== "Personalizado") return period;
+    return customStartMonth === customEndMonth ? formatMonth(customStartMonth) : `${formatMonth(customStartMonth)} – ${formatMonth(customEndMonth)}`;
+  }, [period, customStartMonth, customEndMonth]);
   const totals = useMemo(() => ({
     income: periodMovements.filter((item) => item.amount > 0).reduce((sum, item) => sum + item.amount, 0),
     expense: Math.abs(periodMovements.filter((item) => item.amount < 0).reduce((sum, item) => sum + item.amount, 0))
@@ -399,17 +417,20 @@ function FinanceApp() {
           {activeTab === "inicio" && (
             <>
               <View style={styles.periodRow}>
-                {["Este mes", "3 meses", "Año"].map((item) => (
+                {(["Este mes", "3 meses", "Año"] as DashboardPeriod[]).map((item) => (
                   <TouchableOpacity key={item} onPress={() => setPeriod(item)} style={[styles.periodPill, period === item && styles.periodPillActive]}>
                     <Text style={[styles.periodText, period === item && styles.periodTextActive]}>{item}</Text>
                   </TouchableOpacity>
                 ))}
+                <TouchableOpacity onPress={() => setPeriodPickerOpen(true)} style={[styles.periodPill, period === "Personalizado" && styles.periodPillActive]}>
+                  <Text style={[styles.periodText, period === "Personalizado" && styles.periodTextActive]}>Elegir período</Text>
+                </TouchableOpacity>
               </View>
 
               <View style={styles.balanceCard}>
                 <Text style={styles.cardLabel}>BALANCE DISPONIBLE</Text>
                 <Text style={styles.balance}>Bs {(totals.income - totals.expense).toLocaleString("es-BO", { minimumFractionDigits: 2 })}</Text>
-                <Text style={styles.balanceCaption}>{period}</Text>
+                <Text style={styles.balanceCaption}>{periodLabel}</Text>
                 <View style={styles.divider} />
                 <View style={styles.totalsRow}>
                   <View style={styles.totalBlock}><Text style={styles.totalDotIncome}>↑</Text><View><Text style={styles.totalLabel}>Ingresos</Text><Text style={styles.totalValue}>Bs {totals.income.toLocaleString("es-BO", { minimumFractionDigits: 2 })}</Text></View></View>
@@ -593,6 +614,18 @@ function FinanceApp() {
           onClose={() => setMonthlyAllocationModalOpen(false)}
           onSave={saveMonthlyIncomeAllocations}
         />
+        <PeriodRangePicker
+          visible={periodPickerOpen}
+          startMonth={customStartMonth}
+          endMonth={customEndMonth}
+          onClose={() => setPeriodPickerOpen(false)}
+          onApply={(startMonth, endMonth) => {
+            setCustomStartMonth(startMonth);
+            setCustomEndMonth(endMonth);
+            setPeriod("Personalizado");
+            setPeriodPickerOpen(false);
+          }}
+        />
         <CategoryEditor visible={categoryModalOpen} onClose={() => setCategoryModalOpen(false)} onSave={createCategory} />
         <GasChangeEditor
           visible={gasModalOpen}
@@ -699,6 +732,60 @@ function MonthPicker({ visible, value, onClose, onSelect }: { visible: boolean; 
           return <TouchableOpacity key={monthValue} onPress={() => onSelect(monthValue)} style={[styles.monthCell, selected && styles.monthCellSelected]}><Text style={[styles.monthCellText, selected && styles.monthCellTextSelected]}>{name.charAt(0).toUpperCase() + name.slice(1)}</Text></TouchableOpacity>;
         })}</View>
         <TouchableOpacity onPress={() => onSelect(monthKey())} style={styles.calendarTodayButton}><Text style={styles.calendarTodayButtonText}>Mes actual</Text></TouchableOpacity>
+      </View>
+    </View>
+  </Modal>;
+}
+
+function PeriodRangePicker({ visible, startMonth, endMonth, onClose, onApply }: { visible: boolean; startMonth: string; endMonth: string; onClose: () => void; onApply: (startMonth: string, endMonth: string) => void }) {
+  const [year, setYear] = useState(dateAtNoon(startMonth).getFullYear());
+  const [draftStart, setDraftStart] = useState(startMonth);
+  const [draftEnd, setDraftEnd] = useState(endMonth);
+  const [selecting, setSelecting] = useState<"start" | "end">("start");
+
+  useEffect(() => {
+    if (!visible) return;
+    setDraftStart(startMonth);
+    setDraftEnd(endMonth);
+    setYear(dateAtNoon(startMonth).getFullYear());
+    setSelecting("start");
+  }, [visible, startMonth, endMonth]);
+
+  const monthNames = Array.from({ length: 12 }, (_, month) => new Date(year, month, 1, 12).toLocaleDateString("es-BO", { month: "short" }).replace(".", ""));
+  const selectMonth = (value: string) => {
+    if (selecting === "start") {
+      setDraftStart(value);
+      if (value > draftEnd) setDraftEnd(value);
+      setSelecting("end");
+    } else {
+      setDraftEnd(value);
+      if (value < draftStart) setDraftStart(value);
+    }
+  };
+
+  return <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <View style={styles.calendarBackdrop}>
+      <TouchableOpacity accessibilityLabel="Cerrar selector de período" style={styles.calendarDismissArea} onPress={onClose} />
+      <View style={styles.calendarSheet}>
+        <View style={styles.calendarHandle} />
+        <Text style={styles.periodPickerTitle}>Elegir período</Text>
+        <Text style={styles.periodPickerHelp}>Selecciona un solo mes o un rango de varios meses.</Text>
+        <View style={styles.periodSelectionRow}>
+          <TouchableOpacity onPress={() => { setSelecting("start"); setYear(dateAtNoon(draftStart).getFullYear()); }} style={[styles.periodSelectionBox, selecting === "start" && styles.periodSelectionBoxActive]}><Text style={styles.periodSelectionLabel}>DESDE</Text><Text style={styles.periodSelectionValue}>{formatMonth(draftStart)}</Text></TouchableOpacity>
+          <TouchableOpacity onPress={() => { setSelecting("end"); setYear(dateAtNoon(draftEnd).getFullYear()); }} style={[styles.periodSelectionBox, selecting === "end" && styles.periodSelectionBoxActive]}><Text style={styles.periodSelectionLabel}>HASTA</Text><Text style={styles.periodSelectionValue}>{formatMonth(draftEnd)}</Text></TouchableOpacity>
+        </View>
+        <View style={styles.calendarHeader}>
+          <TouchableOpacity accessibilityLabel="Año anterior" onPress={() => setYear((current) => current - 1)} style={styles.calendarArrow}><Text style={styles.calendarArrowText}>‹</Text></TouchableOpacity>
+          <Text style={styles.calendarMonth}>{year}</Text>
+          <TouchableOpacity accessibilityLabel="Año siguiente" onPress={() => setYear((current) => current + 1)} style={styles.calendarArrow}><Text style={styles.calendarArrowText}>›</Text></TouchableOpacity>
+        </View>
+        <View style={styles.monthGrid}>{monthNames.map((name, month) => {
+          const value = monthKey(new Date(year, month, 1, 12));
+          const boundary = value === draftStart || value === draftEnd;
+          const inRange = value > draftStart && value < draftEnd;
+          return <TouchableOpacity key={value} onPress={() => selectMonth(value)} style={[styles.monthCell, inRange && styles.monthCellInRange, boundary && styles.monthCellSelected]}><Text style={[styles.monthCellText, boundary && styles.monthCellTextSelected]}>{name.charAt(0).toUpperCase() + name.slice(1)}</Text></TouchableOpacity>;
+        })}</View>
+        <TouchableOpacity onPress={() => onApply(draftStart, draftEnd)} style={styles.periodApplyButton}><Text style={styles.periodApplyButtonText}>Aplicar período</Text></TouchableOpacity>
       </View>
     </View>
   </Modal>;
@@ -919,7 +1006,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "#F6F7FB" }, app: { flex: 1 }, content: { paddingHorizontal: 20, paddingTop: 18 },
   header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 22 }, eyebrow: { fontSize: 11, letterSpacing: 1.5, color: "#6D5EF7", fontWeight: "800" }, greeting: { fontSize: 28, color: "#17203A", fontWeight: "800", marginTop: 3 },
   avatar: { width: 44, height: 44, borderRadius: 15, backgroundColor: "#EAE7FF", alignItems: "center", justifyContent: "center" }, avatarText: { color: "#5949E8", fontWeight: "800" },
-  periodRow: { flexDirection: "row", marginBottom: 14, gap: 8 }, periodPill: { paddingVertical: 8, paddingHorizontal: 14, borderRadius: 18, backgroundColor: "#EAECF3" }, periodPillActive: { backgroundColor: "#17203A" }, periodText: { color: "#727A8E", fontWeight: "600", fontSize: 12 }, periodTextActive: { color: "white" },
+  periodRow: { flexDirection: "row", flexWrap: "wrap", marginBottom: 14, gap: 8 }, periodPill: { paddingVertical: 8, paddingHorizontal: 14, borderRadius: 18, backgroundColor: "#EAECF3" }, periodPillActive: { backgroundColor: "#17203A" }, periodText: { color: "#727A8E", fontWeight: "600", fontSize: 12 }, periodTextActive: { color: "white" },
   balanceCard: { backgroundColor: "#6D5EF7", borderRadius: 26, padding: 24, shadowColor: "#6D5EF7", shadowOpacity: 0.22, shadowRadius: 18, shadowOffset: { width: 0, height: 10 }, elevation: 5 }, cardLabel: { color: "#DCD8FF", letterSpacing: 1.2, fontWeight: "700", fontSize: 11 }, balance: { color: "white", fontSize: 34, fontWeight: "800", marginTop: 8 }, balanceCaption: { color: "#DCD8FF", marginTop: 3 }, divider: { height: 1, backgroundColor: "rgba(255,255,255,0.18)", marginVertical: 20 }, totalsRow: { flexDirection: "row", justifyContent: "space-between" }, totalBlock: { flexDirection: "row", alignItems: "center", gap: 9, width: "48%" }, totalDotIncome: { backgroundColor: "#51D7AA", color: "#12493B", paddingHorizontal: 7, paddingVertical: 5, borderRadius: 10, fontWeight: "900" }, totalDotExpense: { backgroundColor: "#FF9A9A", color: "#712A2A", paddingHorizontal: 7, paddingVertical: 5, borderRadius: 10, fontWeight: "900" }, totalLabel: { color: "#DCD8FF", fontSize: 11 }, totalValue: { color: "white", fontWeight: "800", fontSize: 15, marginTop: 2 },
   sectionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 30, marginBottom: 12 }, sectionTitle: { fontSize: 18, fontWeight: "800", color: "#17203A" }, sectionHint: { fontSize: 12, color: "#8A91A3", marginTop: 3 }, link: { color: "#6D5EF7", fontWeight: "700", fontSize: 12 },
   categoryCard: { backgroundColor: "white", borderRadius: 20, padding: 18 }, barTrack: { height: 12, flexDirection: "row", marginBottom: 16 }, barPart: { height: 12 }, categoryRow: { flexDirection: "row", alignItems: "center", paddingVertical: 8 }, categoryDot: { width: 9, height: 9, borderRadius: 5, marginRight: 10 }, categoryName: { flex: 1, color: "#343B50", fontWeight: "600" }, categoryPercent: { width: 40, color: "#9AA0B0", fontSize: 12 }, categoryValue: { width: 78, textAlign: "right", color: "#17203A", fontWeight: "700" },
@@ -934,7 +1021,8 @@ const styles = StyleSheet.create({
   modalSafe: { flex: 1, backgroundColor: "#F6F7FB" }, modalContent: { padding: 20, paddingBottom: 50 }, modalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 30 }, modalTitle: { fontSize: 17, fontWeight: "800", color: "#17203A" }, modalCancel: { color: "#7C8497", fontWeight: "600" }, modalSave: { color: "#6D5EF7", fontWeight: "800" }, inputLabel: { color: "#777F92", fontSize: 10, letterSpacing: 1.1, fontWeight: "800", marginTop: 20, marginBottom: 8 }, kindRow: { flexDirection: "row", gap: 10 }, kindButton: { flex: 1, paddingVertical: 14, alignItems: "center", backgroundColor: "#E9EBF2", borderRadius: 14 }, kindButtonExpense: { backgroundColor: "#EF6A6A" }, kindButtonIncome: { backgroundColor: "#20A477" }, kindText: { color: "#697084", fontWeight: "800" }, kindTextActive: { color: "white" }, amountInput: { backgroundColor: "white", borderRadius: 18, padding: 18, fontSize: 30, fontWeight: "800", color: "#17203A" }, textInput: { backgroundColor: "white", borderRadius: 14, paddingHorizontal: 15, paddingVertical: 14, fontSize: 15, color: "#17203A", borderWidth: 1, borderColor: "#E7E9F0" }, categoryPicker: { flexDirection: "row", flexWrap: "wrap", gap: 8 }, pickerChip: { backgroundColor: "#E9EBF2", paddingHorizontal: 12, paddingVertical: 9, borderRadius: 14 }, pickerChipActive: { backgroundColor: "#6D5EF7", paddingHorizontal: 12, paddingVertical: 9, borderRadius: 14 }, pickerChipText: { color: "#626A7C", fontWeight: "700", fontSize: 12 }, pickerChipTextActive: { color: "white", fontWeight: "700", fontSize: 12 }, clearCategory: { color: "#D05A67", textAlign: "center", marginTop: 24, fontWeight: "700" }, deleteButton: { borderWidth: 1, borderColor: "#F1B7BD", borderRadius: 14, paddingVertical: 13, alignItems: "center", marginTop: 18 }, deleteButtonText: { color: "#C94C59", fontWeight: "800" },
   datePickerButton: { backgroundColor: "white", borderRadius: 16, borderWidth: 1, borderColor: "#E7E9F0", padding: 13, flexDirection: "row", alignItems: "center", gap: 12 }, datePickerIcon: { width: 40, height: 40, borderRadius: 13, backgroundColor: "#EAE7FF", alignItems: "center", justifyContent: "center" }, datePickerIconText: { color: "#5949E8", fontSize: 18, fontWeight: "900" }, datePickerValue: { color: "#232A3E", fontSize: 15, fontWeight: "900" }, datePickerHint: { color: "#8A91A3", fontSize: 10, marginTop: 3 }, datePickerChevron: { color: "#A3A8B5", fontSize: 26 },
   calendarBackdrop: { flex: 1, backgroundColor: "rgba(20,25,40,0.42)", justifyContent: "flex-end" }, calendarDismissArea: { flex: 1 }, calendarSheet: { backgroundColor: "#F8F9FC", borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 18, paddingTop: 10, paddingBottom: 30 }, calendarHandle: { width: 42, height: 5, borderRadius: 3, backgroundColor: "#D5D8E1", alignSelf: "center", marginBottom: 15 }, calendarHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 13 }, calendarMonth: { color: "#17203A", fontSize: 18, fontWeight: "900" }, calendarArrow: { width: 42, height: 42, borderRadius: 14, backgroundColor: "white", alignItems: "center", justifyContent: "center" }, calendarArrowText: { color: "#5949E8", fontSize: 29, lineHeight: 31 }, calendarWeekRow: { flexDirection: "row", marginBottom: 5 }, calendarWeekDay: { width: "14.285%", textAlign: "center", color: "#9AA0AF", fontSize: 10, fontWeight: "900" }, calendarGrid: { flexDirection: "row", flexWrap: "wrap" }, calendarDayCell: { width: "14.285%", height: 44, alignItems: "center", justifyContent: "center" }, calendarDayCircle: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" }, calendarToday: { borderWidth: 1, borderColor: "#6D5EF7" }, calendarSelected: { backgroundColor: "#6D5EF7", borderColor: "#6D5EF7" }, calendarDayText: { color: "#30374B", fontWeight: "700", fontSize: 13 }, calendarSelectedText: { color: "white", fontWeight: "900" }, calendarTodayButton: { marginTop: 12, backgroundColor: "#EAE7FF", borderRadius: 14, paddingVertical: 12, alignItems: "center" }, calendarTodayButtonText: { color: "#5949E8", fontWeight: "900" },
-  monthGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 }, monthCell: { width: "31%", backgroundColor: "white", borderRadius: 14, paddingVertical: 14, alignItems: "center", borderWidth: 1, borderColor: "#EFF0F4" }, monthCellSelected: { backgroundColor: "#6D5EF7", borderColor: "#6D5EF7" }, monthCellText: { color: "#596074", fontWeight: "800", fontSize: 12 }, monthCellTextSelected: { color: "white" },
+  monthGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 }, monthCell: { width: "31%", backgroundColor: "white", borderRadius: 14, paddingVertical: 14, alignItems: "center", borderWidth: 1, borderColor: "#EFF0F4" }, monthCellInRange: { backgroundColor: "#EEEAFE", borderColor: "#DDD8FF" }, monthCellSelected: { backgroundColor: "#6D5EF7", borderColor: "#6D5EF7" }, monthCellText: { color: "#596074", fontWeight: "800", fontSize: 12 }, monthCellTextSelected: { color: "white" },
+  periodPickerTitle: { color: "#17203A", fontSize: 22, fontWeight: "900" }, periodPickerHelp: { color: "#7E8598", fontSize: 12, marginTop: 4, marginBottom: 14 }, periodSelectionRow: { flexDirection: "row", gap: 10, marginBottom: 14 }, periodSelectionBox: { flex: 1, backgroundColor: "white", borderRadius: 14, padding: 12, borderWidth: 1, borderColor: "#E7E9F0" }, periodSelectionBoxActive: { borderColor: "#6D5EF7", backgroundColor: "#F3F1FF" }, periodSelectionLabel: { color: "#8A91A3", fontSize: 9, letterSpacing: 1, fontWeight: "900" }, periodSelectionValue: { color: "#232A3E", fontSize: 12, fontWeight: "900", marginTop: 5 }, periodApplyButton: { marginTop: 14, backgroundColor: "#6D5EF7", borderRadius: 14, paddingVertical: 13, alignItems: "center" }, periodApplyButtonText: { color: "white", fontWeight: "900" },
   allocationHelp: { color: "#7E8598", fontSize: 12, lineHeight: 18, marginBottom: 12 }, allocationMonthButton: { backgroundColor: "white", borderRadius: 16, borderWidth: 1, borderColor: "#E7E9F0", paddingHorizontal: 15, paddingVertical: 13, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }, allocationMonthLabel: { color: "#8A91A3", fontSize: 9, letterSpacing: 0.9, fontWeight: "900" }, allocationMonthValue: { color: "#232A3E", fontSize: 16, fontWeight: "900", marginTop: 4 }, allocationSummary: { flexDirection: "row", justifyContent: "space-between", backgroundColor: "#17203A", borderRadius: 16, padding: 14, marginTop: 12 }, allocationSummaryLabel: { color: "#A9B1C7", fontSize: 9, fontWeight: "800" }, allocationSummaryValue: { color: "white", fontSize: 12, fontWeight: "900", marginTop: 4 }, allocationOver: { color: "#FF9A9A" }, allocationRow: { flexDirection: "row", alignItems: "center", backgroundColor: "white", borderRadius: 14, padding: 10, marginTop: 9, borderWidth: 1, borderColor: "#E7E9F0" }, allocationCategory: { flex: 1, color: "#30374B", fontWeight: "800", fontSize: 12 }, allocationCurrency: { color: "#8A91A3", fontSize: 11, marginRight: 5 }, allocationInput: { width: 74, backgroundColor: "#F5F6FA", borderRadius: 10, paddingHorizontal: 9, paddingVertical: 8, color: "#17203A", fontWeight: "800", textAlign: "right" }, allocationRemove: { width: 30, height: 30, alignItems: "center", justifyContent: "center", marginLeft: 5 }, allocationRemoveText: { color: "#C94C59", fontSize: 22, lineHeight: 24 }, allocationAddLabel: { color: "#8A91A3", fontSize: 9, letterSpacing: 1, fontWeight: "900", marginTop: 16, marginBottom: 8 },
   monthlyAllocationTitle: { color: "#17203A", fontSize: 26, fontWeight: "900", marginBottom: 7 }, noIncomeWarning: { color: "#9B6811", backgroundColor: "#FFF2D7", borderRadius: 14, padding: 13, textAlign: "center", fontWeight: "700", marginTop: 18 }, incomePoolHint: { color: "#496357", backgroundColor: "#E4F7F0", borderRadius: 14, padding: 14, lineHeight: 19, fontSize: 12, marginTop: 20 },
   dialogBackdrop: { flex: 1, backgroundColor: "rgba(20,25,40,0.45)", justifyContent: "center", padding: 24 }, dialog: { backgroundColor: "#F8F9FC", borderRadius: 22, padding: 20 }, dialogTitle: { fontSize: 20, fontWeight: "800", color: "#17203A", marginBottom: 12 }, dialogText: { color: "#6C7385", fontSize: 14, lineHeight: 21 }, dialogActions: { flexDirection: "row", justifyContent: "flex-end", gap: 10, marginTop: 20 }, dialogCancelButton: { paddingHorizontal: 16, paddingVertical: 11, borderRadius: 12, backgroundColor: "#EAECF3" }, dialogCancelText: { color: "#596074", fontWeight: "800" }, dialogDeleteButton: { paddingHorizontal: 16, paddingVertical: 11, borderRadius: 12, backgroundColor: "#D94E5D" }, dialogDeleteText: { color: "white", fontWeight: "900" },
