@@ -17,9 +17,12 @@ const allocations = [
 assert.equal(monthlyIncomeTotal(movements, "2026-09-01"), 200);
 assert.equal(monthlyIncomeTotal(movements, "2026-08-01"), 0);
 
-assert.deepEqual(summarizeMonthlyCategories(movements, allocations, "2026-09-01"), [
+const septemberSummary = summarizeMonthlyCategories(movements, allocations, "2026-09-01");
+
+assert.deepEqual(septemberSummary, [
   { category: "Alimentación", income: 100, expense: 125, balance: -25 },
   { category: "Salud", income: 100, expense: 60, balance: 40 }
 ]);
+assert.equal(septemberSummary.reduce((total, item) => total + item.expense, 0), 185);
 
 console.log("Category comparison tests passed");
