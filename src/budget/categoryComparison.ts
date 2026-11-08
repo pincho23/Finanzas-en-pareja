@@ -1,5 +1,6 @@
 export type AllocationForComparison = { category: string; amount: number; month: string };
-export type MovementForComparison = { amount: number; occurredAt: string; category: string | null };
+export type ExpenseAllocationForComparison = { category: string; amount: number };
+export type MovementForComparison = { amount: number; occurredAt: string; category: string | null; allocations?: ExpenseAllocationForComparison[] };
 
 const movementMonth = (occurredAt: string) => {
   const date = new Date(occurredAt);
@@ -20,8 +21,12 @@ export function summarizeMonthlyCategories(movements: MovementForComparison[], a
 
   movements.forEach((movement) => {
     if (movement.amount < 0 && movementMonth(movement.occurredAt) === month) {
-      const category = movement.category ?? "Sin clasificar";
-      spent.set(category, (spent.get(category) ?? 0) + Math.abs(movement.amount));
+      const expenseAllocations = movement.allocations?.length
+        ? movement.allocations
+        : [{ category: movement.category ?? "Sin clasificar", amount: Math.abs(movement.amount) }];
+      expenseAllocations.forEach(({ category, amount }) => {
+        spent.set(category, (spent.get(category) ?? 0) + amount);
+      });
     }
   });
 

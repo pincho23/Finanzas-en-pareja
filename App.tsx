@@ -30,10 +30,12 @@ type Movement = {
   day: string;
   occurredAt: string;
   categoryId?: string | null;
+  allocations?: ExpenseAllocation[];
   source?: "remote" | "local";
 };
 
 type RemoteCategory = { id: string; name: string };
+type ExpenseAllocation = { category: string; categoryId?: string | null; amount: number };
 type IncomeAllocation = { id?: string; category: string; categoryId?: string | null; amount: number; month: string };
 type DashboardPeriod = "Este mes" | "3 meses" | "Año" | "Personalizado";
 
@@ -108,13 +110,20 @@ function FinanceApp() {
   const mapTransaction = (row: any): Movement => {
     const channel = String(row.channel ?? "manual").toUpperCase();
     const title = row.description || row.counterparty || (row.kind === "income" ? "Ingreso" : "Gasto");
+    const allocations: ExpenseAllocation[] = (row.expense_allocations ?? []).map((allocation: any) => ({
+      category: allocation.categories?.name ?? "Categoría",
+      categoryId: allocation.category_id,
+      amount: Number(allocation.amount)
+    }));
+    const effectiveCategory = allocations.length === 1 ? allocations[0]!.category : (allocations.length ? null : row.categories?.name ?? null);
     return {
       id: row.id,
       title,
       detail: `${channel} · ${new Date(row.occurred_at).toLocaleDateString("es-BO", { day: "numeric", month: "short" })}`,
       amount: row.kind === "income" ? Number(row.amount) : -Number(row.amount),
-      category: row.categories?.name ?? null,
+      category: effectiveCategory,
       categoryId: row.category_id,
+      allocations,
       color: "#6D5EF7",
       day: String(new Date(row.occurred_at).getDate()).padStart(2, "0"),
       occurredAt: row.occurred_at,
@@ -126,7 +135,7 @@ function FinanceApp() {
     if (!supabase || !household) return false;
     const [categoryResult, transactionResult, gasResult, allocationResult] = await Promise.all([
       supabase.from("categories").select("id, name").eq("household_id", household.householdId).is("archived_at", null).order("name"),
-      supabase.from("transactions").select("id, category_id, kind, amount, occurred_at, description, counterparty, channel, categories(name)").eq("household_id", household.householdId).order("occurred_at", { ascending: false }),
+      supabase.from("transactions").select("id, category_id, kind, amount, occurred_at, description, counterparty, channel, categories(name), expense_allocations(category_id, amount, categories(name))").eq("household_id", household.householdId).order("occurred_at", { ascending: false }),
       supabase.from("gas_cylinder_changes").select("id, change_date, kind, notes").eq("household_id", household.householdId).order("change_date", { ascending: false }),
       supabase.from("monthly_income_allocations").select("id, category_id, allocation_month, amount, categories(name)").eq("household_id", household.householdId)
     ]);
@@ -230,15 +239,15 @@ function FinanceApp() {
   }), [periodMovements]);
   const filteredMovements = useMemo(() => savedMovements.filter((item) => {
     const matchesKind = movementFilter === "all" || (movementFilter === "income" ? item.amount > 0 : item.amount < 0);
-    const matchesCategory = !categoryFilter || item.category === categoryFilter;
+    const matchesCategory = !categoryFilter || item.category === categoryFilter || item.allocations?.some((allocation) => allocation.category === categoryFilter);
     return matchesKind && matchesCategory;
   }), [savedMovements, movementFilter, categoryFilter]);
   const categorySummary = useMemo(() => {
     const palette = ["#6D5EF7", "#20A477", "#E8A838", "#EF6A6A", "#4C91E8"];
     const totalsByCategory = new Map<string, number>();
     periodMovements.filter((item) => item.amount < 0).forEach((item) => {
-      const name = item.category ?? "Sin clasificar";
-      totalsByCategory.set(name, (totalsByCategory.get(name) ?? 0) + Math.abs(item.amount));
+      const allocations = item.allocations?.length ? item.allocations : [{ category: item.category ?? "Sin clasificar", amount: Math.abs(item.amount) }];
+      allocations.forEach((allocation) => totalsByCategory.set(allocation.category, (totalsByCategory.get(allocation.category) ?? 0) + allocation.amount));
     });
     const total = Array.from(totalsByCategory.values()).reduce((sum, value) => sum + value, 0);
     return Array.from(totalsByCategory.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([name, value], index) => ({ name, value, percentage: total ? Math.round(value / total * 100) : 0, color: palette[index] ?? "#64748B" }));
@@ -249,7 +258,7 @@ function FinanceApp() {
   const comparisonMonthExpense = useMemo(() => monthlyCategoryComparison.reduce((sum, item) => sum + item.expense, 0), [monthlyCategoryComparison]);
   const comparisonMonthRemaining = comparisonMonthIncome - comparisonMonthAssigned;
   const comparisonMonthBalance = comparisonMonthIncome - comparisonMonthExpense;
-  const pendingMovements = savedMovements.filter((item) => item.amount < 0 && !item.category);
+  const pendingMovements = savedMovements.filter((item) => item.amount < 0 && !item.category && !item.allocations?.length);
   const pendingCount = pendingMovements.length;
   const initials = (household?.displayName ?? "MC").split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "MC";
   const gasForecast = useMemo(() => calculateGasForecast(gasChanges), [gasChanges]);
@@ -316,12 +325,17 @@ function FinanceApp() {
       return;
     }
     const isIncome = movement.amount > 0;
-    const categoryId = !isIncome && movement.category ? remoteCategories.find((item) => item.name === movement.category)?.id ?? null : null;
+    const allocationRows = isIncome ? [] : (movement.allocations ?? []).map((allocation) => ({
+      category_id: remoteCategories.find((item) => item.name === allocation.category)?.id,
+      amount: allocation.amount
+    }));
+    if (allocationRows.some((allocation) => !allocation.category_id)) return Alert.alert("No se pudo guardar", "Una de las categorías ya no está disponible.");
+    const categoryId = allocationRows.length === 1 ? allocationRows[0]!.category_id : null;
     const values = {
       household_id: household.householdId,
       category_id: categoryId,
       kind: isIncome ? "income" : "expense",
-      status: isIncome ? "classified" : (categoryId ? "classified" : "pending"),
+      status: isIncome ? "classified" : (allocationRows.length ? "classified" : "pending"),
       amount: Math.abs(movement.amount),
       occurred_at: movement.occurredAt,
       description: movement.title,
@@ -334,6 +348,13 @@ function FinanceApp() {
       ? await supabase.from("transactions").update(values).eq("id", editingMovement.id).eq("household_id", household.householdId).select("id").single()
       : await supabase.from("transactions").insert(values).select("id").single();
     if (result.error) return Alert.alert("No se pudo guardar", result.error.message);
+    if (!isIncome) {
+      const { error: allocationError } = await supabase.rpc("replace_expense_allocations", {
+        target_transaction: result.data.id,
+        allocation_rows: allocationRows
+      });
+      if (allocationError) return Alert.alert("No se pudo distribuir el gasto", allocationError.message);
+    }
     setMovementModalOpen(false);
     await loadRemoteData();
   };
@@ -653,8 +674,8 @@ export default function App() {
 function MovementList({ items, onSelect }: { items: Movement[]; onSelect: (movement: Movement) => void }) {
   return <View style={styles.movementCard}>{items.map((item, index) => {
     const isIncome = item.amount > 0;
-    const isPending = !isIncome && !item.category;
-    const tagLabel = isIncome ? "Ingreso" : (item.category ?? "Clasificar");
+    const isPending = !isIncome && !item.category && !item.allocations?.length;
+    const tagLabel = isIncome ? "Ingreso" : item.allocations && item.allocations.length > 1 ? `${item.allocations.length} categorías` : (item.allocations?.[0]?.category ?? item.category ?? "Clasificar");
     return <TouchableOpacity key={item.id} onPress={() => onSelect(item)} style={[styles.movementRow, index < items.length - 1 && styles.movementBorder]}>
       <View style={styles.dateBox}><Text style={styles.dateDay}>{String(new Date(item.occurredAt).getDate()).padStart(2, "0")}</Text><Text style={styles.dateMonth}>{new Date(item.occurredAt).toLocaleDateString("es-BO", { month: "short" }).replace(".", "").toUpperCase()}</Text></View>
       <View style={{ flex: 1 }}><Text style={styles.movementTitle}>{item.title}</Text><Text style={styles.movementDetail}>{item.detail}</Text><View style={[styles.tag, isPending && styles.tagPending]}><Text style={[styles.tagText, isPending && styles.tagPendingText]}>{tagLabel}</Text></View></View>
@@ -837,7 +858,7 @@ function MovementEditor({ visible, movement, categories, onClose, onSave, onDele
   const [kind, setKind] = useState<"income" | "expense">("expense");
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
-  const [category, setCategory] = useState<string | null>(null);
+  const [allocationAmounts, setAllocationAmounts] = useState<Record<string, string>>({});
   const [occurredDate, setOccurredDate] = useState(toIsoDate(new Date()));
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
@@ -846,7 +867,10 @@ function MovementEditor({ visible, movement, categories, onClose, onSave, onDele
     setKind(movement?.amount && movement.amount > 0 ? "income" : "expense");
     setAmount(movement ? String(Math.abs(movement.amount)) : "");
     setDescription(movement?.title ?? "");
-    setCategory(movement?.category ?? null);
+    const existingAllocations = movement?.allocations?.length
+      ? movement.allocations
+      : movement?.category ? [{ category: movement.category, amount: Math.abs(movement.amount) }] : [];
+    setAllocationAmounts(Object.fromEntries(existingAllocations.map((allocation) => [allocation.category, String(allocation.amount)])));
     setOccurredDate(movement ? toIsoDate(new Date(movement.occurredAt)) : toIsoDate(new Date()));
     setDeleteConfirmationOpen(false);
   }, [movement, visible]);
@@ -855,6 +879,19 @@ function MovementEditor({ visible, movement, categories, onClose, onSave, onDele
     const numericAmount = Number(amount.replace(",", "."));
     if (!description.trim() || !Number.isFinite(numericAmount) || numericAmount <= 0) {
       Alert.alert("Faltan datos", "Ingresa una descripción y un importe válido.");
+      return;
+    }
+    const allocations = kind === "expense" ? Object.entries(allocationAmounts).map(([allocationCategory, allocationAmount]) => ({
+      category: allocationCategory,
+      amount: Number(allocationAmount.replace(",", "."))
+    })) : [];
+    if (allocations.some((allocation) => !Number.isFinite(allocation.amount) || allocation.amount <= 0)) {
+      Alert.alert("Revisa la distribución", "Cada categoría agregada debe tener un importe mayor a cero.");
+      return;
+    }
+    const allocatedTotal = allocations.reduce((sum, allocation) => sum + allocation.amount, 0);
+    if (allocations.length && Math.abs(allocatedTotal - numericAmount) > 0.009) {
+      Alert.alert("La distribución no coincide", `Distribuiste Bs ${allocatedTotal.toFixed(2)} de Bs ${numericAmount.toFixed(2)}. Los importes deben sumar el total del gasto.`);
       return;
     }
     const dateParts = occurredDate.split("-").map(Number);
@@ -866,7 +903,8 @@ function MovementEditor({ visible, movement, categories, onClose, onSave, onDele
       title: description.trim(),
       detail: `${detailPrefix} · ${dateAtNoon(occurredDate).toLocaleDateString("es-BO", { day: "numeric", month: "short" })}`,
       amount: kind === "income" ? numericAmount : -numericAmount,
-      category: kind === "income" ? null : category,
+      category: kind === "expense" && allocations.length === 1 ? allocations[0]!.category : null,
+      allocations: kind === "expense" ? allocations : [],
       color: movement?.color ?? "#6D5EF7",
       day: String(dateParts[2]).padStart(2, "0"),
       occurredAt: occurredAt.toISOString()
@@ -887,8 +925,16 @@ function MovementEditor({ visible, movement, categories, onClose, onSave, onDele
       <Text style={styles.inputLabel}>IMPORTE EN BOLIVIANOS</Text><TextInput value={amount} onChangeText={setAmount} keyboardType="decimal-pad" placeholder="0,00" style={styles.amountInput} />
       <Text style={styles.inputLabel}>DESCRIPCIÓN</Text><TextInput value={description} onChangeText={setDescription} placeholder="Ej. Supermercado semanal" style={styles.textInput} />
       {kind === "expense" ? <>
-        <Text style={styles.inputLabel}>CATEGORÍA</Text><View style={styles.categoryPicker}>{categories.map((item) => <TouchableOpacity key={item} onPress={() => setCategory(item)} style={[styles.pickerChip, category === item && styles.pickerChipActive]}><Text style={[styles.pickerChipText, category === item && styles.pickerChipTextActive]}>{item}</Text></TouchableOpacity>)}</View>
-        {movement && <TouchableOpacity onPress={() => setCategory(null)}><Text style={styles.clearCategory}>Dejar pendiente de clasificación</Text></TouchableOpacity>}
+        <Text style={styles.inputLabel}>DISTRIBUCIÓN POR CATEGORÍA</Text>
+        <Text style={styles.allocationHelp}>Puedes asignar todo el gasto a una categoría o dividirlo entre varias. La suma debe coincidir con el importe total.</Text>
+        {Object.entries(allocationAmounts).map(([allocationCategory, allocationAmount]) => <View key={allocationCategory} style={styles.allocationRow}>
+          <Text style={styles.allocationCategory}>{allocationCategory}</Text><Text style={styles.allocationCurrency}>Bs</Text>
+          <TextInput value={allocationAmount} onChangeText={(value) => setAllocationAmounts((current) => ({ ...current, [allocationCategory]: value }))} keyboardType="decimal-pad" placeholder="0,00" style={styles.allocationInput} />
+          <TouchableOpacity accessibilityLabel={`Quitar ${allocationCategory}`} onPress={() => setAllocationAmounts((current) => { const next = { ...current }; delete next[allocationCategory]; return next; })} style={styles.allocationRemove}><Text style={styles.allocationRemoveText}>×</Text></TouchableOpacity>
+        </View>)}
+        {!!Object.keys(allocationAmounts).length && <View style={styles.expenseAllocationSummary}><Text style={styles.expenseAllocationSummaryText}>Asignado: Bs {Object.values(allocationAmounts).reduce((sum, value) => sum + (Number(value.replace(",", ".")) || 0), 0).toFixed(2)}</Text><Text style={styles.expenseAllocationSummaryText}>Falta: Bs {Math.max(0, (Number(amount.replace(",", ".")) || 0) - Object.values(allocationAmounts).reduce((sum, value) => sum + (Number(value.replace(",", ".")) || 0), 0)).toFixed(2)}</Text></View>}
+        {categories.some((item) => !(item in allocationAmounts)) && <><Text style={styles.allocationAddLabel}>AGREGAR CATEGORÍA</Text><View style={styles.categoryPicker}>{categories.filter((item) => !(item in allocationAmounts)).map((item) => <TouchableOpacity key={item} onPress={() => setAllocationAmounts((current) => ({ ...current, [item]: "" }))} style={styles.pickerChip}><Text style={styles.pickerChipText}>＋ {item}</Text></TouchableOpacity>)}</View></>}
+        {movement && <TouchableOpacity onPress={() => setAllocationAmounts({})}><Text style={styles.clearCategory}>Dejar pendiente de clasificación</Text></TouchableOpacity>}
       </> : <Text style={styles.incomePoolHint}>Este ingreso se sumará automáticamente a los ingresos del mes. La distribución por categorías se realiza desde el inicio.</Text>}
       {movement && onDelete && <TouchableOpacity onPress={() => setDeleteConfirmationOpen(true)} style={styles.deleteButton}><Text style={styles.deleteButtonText}>Eliminar movimiento</Text></TouchableOpacity>}
       <CalendarPicker visible={calendarOpen} value={occurredDate} onClose={() => setCalendarOpen(false)} onSelect={(value) => { setOccurredDate(value); setCalendarOpen(false); }} />
@@ -1018,12 +1064,12 @@ const styles = StyleSheet.create({
   primaryButton: { backgroundColor: "#6D5EF7", paddingVertical: 14, borderRadius: 16, alignItems: "center", marginBottom: 16 }, primaryButtonText: { color: "white", fontWeight: "800" }, manageCategoryRow: { flexDirection: "row", alignItems: "center", paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: "#F1F2F6" }, categoryIcon: { width: 38, height: 38, borderRadius: 12, alignItems: "center", justifyContent: "center", marginRight: 12 }, manageCategoryName: { flex: 1, fontWeight: "700", color: "#2D3448" }, chevron: { fontSize: 24, color: "#A3A8B5" },
   settingsCard: { backgroundColor: "white", borderRadius: 20, paddingHorizontal: 18 }, settingRow: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 17, borderBottomWidth: 1, borderBottomColor: "#F0F1F5" }, statusDot: { width: 11, height: 11, borderRadius: 6 }, statusConnected: { backgroundColor: "#20A477" }, statusOffline: { backgroundColor: "#EF6A6A" }, statusPending: { backgroundColor: "#E8A838" }, settingTitle: { color: "#232A3E", fontWeight: "800" }, settingHint: { color: "#8A91A3", fontSize: 11, marginTop: 3 }, settingState: { color: "#6D5EF7", fontWeight: "700", fontSize: 11 }, notificationButton: { backgroundColor: "#6D5EF7", borderRadius: 14, paddingVertical: 13, alignItems: "center", marginBottom: 16 }, notificationButtonText: { color: "white", fontWeight: "800" },
   nav: { position: "absolute", bottom: 0, left: 0, right: 0, height: 84, backgroundColor: "white", borderTopWidth: 1, borderTopColor: "#ECEEF3", flexDirection: "row", alignItems: "center", paddingHorizontal: 6, paddingBottom: 8 }, navSide: { flex: 1, flexDirection: "row", alignItems: "center" }, navItem: { alignItems: "center", justifyContent: "center", flex: 1, minWidth: 58 }, navSymbol: { color: "#9AA0AF", fontSize: 20, height: 24 }, navLabel: { color: "#9AA0AF", fontSize: 9, marginTop: 3, fontWeight: "600" }, navActive: { color: "#6D5EF7" }, addButton: { width: 54, height: 54, borderRadius: 18, backgroundColor: "#6D5EF7", alignItems: "center", justifyContent: "center", marginTop: -28, marginHorizontal: 4, shadowColor: "#6D5EF7", shadowOpacity: 0.32, shadowRadius: 12, shadowOffset: { width: 0, height: 7 }, elevation: 7 }, addButtonText: { color: "white", fontSize: 28, lineHeight: 30 },
-  modalSafe: { flex: 1, backgroundColor: "#F6F7FB" }, modalContent: { padding: 20, paddingBottom: 50 }, modalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 30 }, modalTitle: { fontSize: 17, fontWeight: "800", color: "#17203A" }, modalCancel: { color: "#7C8497", fontWeight: "600" }, modalSave: { color: "#6D5EF7", fontWeight: "800" }, inputLabel: { color: "#777F92", fontSize: 10, letterSpacing: 1.1, fontWeight: "800", marginTop: 20, marginBottom: 8 }, kindRow: { flexDirection: "row", gap: 10 }, kindButton: { flex: 1, paddingVertical: 14, alignItems: "center", backgroundColor: "#E9EBF2", borderRadius: 14 }, kindButtonExpense: { backgroundColor: "#EF6A6A" }, kindButtonIncome: { backgroundColor: "#20A477" }, kindText: { color: "#697084", fontWeight: "800" }, kindTextActive: { color: "white" }, amountInput: { backgroundColor: "white", borderRadius: 18, padding: 18, fontSize: 30, fontWeight: "800", color: "#17203A" }, textInput: { backgroundColor: "white", borderRadius: 14, paddingHorizontal: 15, paddingVertical: 14, fontSize: 15, color: "#17203A", borderWidth: 1, borderColor: "#E7E9F0" }, categoryPicker: { flexDirection: "row", flexWrap: "wrap", gap: 8 }, pickerChip: { backgroundColor: "#E9EBF2", paddingHorizontal: 12, paddingVertical: 9, borderRadius: 14 }, pickerChipActive: { backgroundColor: "#6D5EF7", paddingHorizontal: 12, paddingVertical: 9, borderRadius: 14 }, pickerChipText: { color: "#626A7C", fontWeight: "700", fontSize: 12 }, pickerChipTextActive: { color: "white", fontWeight: "700", fontSize: 12 }, clearCategory: { color: "#D05A67", textAlign: "center", marginTop: 24, fontWeight: "700" }, deleteButton: { borderWidth: 1, borderColor: "#F1B7BD", borderRadius: 14, paddingVertical: 13, alignItems: "center", marginTop: 18 }, deleteButtonText: { color: "#C94C59", fontWeight: "800" },
+  modalSafe: { flex: 1, backgroundColor: "#F6F7FB" }, modalContent: { padding: 20, paddingBottom: 50 }, modalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 30 }, modalTitle: { fontSize: 17, fontWeight: "800", color: "#17203A" }, modalCancel: { color: "#7C8497", fontWeight: "600" }, modalSave: { color: "#6D5EF7", fontWeight: "800" }, inputLabel: { color: "#777F92", fontSize: 10, letterSpacing: 1.1, fontWeight: "800", marginTop: 20, marginBottom: 8 }, kindRow: { flexDirection: "row", gap: 10 }, kindButton: { flex: 1, paddingVertical: 14, alignItems: "center", backgroundColor: "#E9EBF2", borderRadius: 14 }, kindButtonExpense: { backgroundColor: "#EF6A6A" }, kindButtonIncome: { backgroundColor: "#20A477" }, kindText: { color: "#697084", fontWeight: "800" }, kindTextActive: { color: "white" }, amountInput: { backgroundColor: "white", borderRadius: 18, padding: 18, fontSize: 30, fontWeight: "800", color: "#17203A" }, textInput: { backgroundColor: "white", borderRadius: 14, paddingHorizontal: 15, paddingVertical: 14, fontSize: 16, color: "#17203A", borderWidth: 1, borderColor: "#E7E9F0" }, categoryPicker: { flexDirection: "row", flexWrap: "wrap", gap: 8 }, pickerChip: { backgroundColor: "#E9EBF2", paddingHorizontal: 12, paddingVertical: 9, borderRadius: 14 }, pickerChipActive: { backgroundColor: "#6D5EF7", paddingHorizontal: 12, paddingVertical: 9, borderRadius: 14 }, pickerChipText: { color: "#626A7C", fontWeight: "700", fontSize: 12 }, pickerChipTextActive: { color: "white", fontWeight: "700", fontSize: 12 }, clearCategory: { color: "#D05A67", textAlign: "center", marginTop: 24, fontWeight: "700" }, deleteButton: { borderWidth: 1, borderColor: "#F1B7BD", borderRadius: 14, paddingVertical: 13, alignItems: "center", marginTop: 18 }, deleteButtonText: { color: "#C94C59", fontWeight: "800" },
   datePickerButton: { backgroundColor: "white", borderRadius: 16, borderWidth: 1, borderColor: "#E7E9F0", padding: 13, flexDirection: "row", alignItems: "center", gap: 12 }, datePickerIcon: { width: 40, height: 40, borderRadius: 13, backgroundColor: "#EAE7FF", alignItems: "center", justifyContent: "center" }, datePickerIconText: { color: "#5949E8", fontSize: 18, fontWeight: "900" }, datePickerValue: { color: "#232A3E", fontSize: 15, fontWeight: "900" }, datePickerHint: { color: "#8A91A3", fontSize: 10, marginTop: 3 }, datePickerChevron: { color: "#A3A8B5", fontSize: 26 },
   calendarBackdrop: { flex: 1, backgroundColor: "rgba(20,25,40,0.42)", justifyContent: "flex-end" }, calendarDismissArea: { flex: 1 }, calendarSheet: { backgroundColor: "#F8F9FC", borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 18, paddingTop: 10, paddingBottom: 30 }, calendarHandle: { width: 42, height: 5, borderRadius: 3, backgroundColor: "#D5D8E1", alignSelf: "center", marginBottom: 15 }, calendarHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 13 }, calendarMonth: { color: "#17203A", fontSize: 18, fontWeight: "900" }, calendarArrow: { width: 42, height: 42, borderRadius: 14, backgroundColor: "white", alignItems: "center", justifyContent: "center" }, calendarArrowText: { color: "#5949E8", fontSize: 29, lineHeight: 31 }, calendarWeekRow: { flexDirection: "row", marginBottom: 5 }, calendarWeekDay: { width: "14.285%", textAlign: "center", color: "#9AA0AF", fontSize: 10, fontWeight: "900" }, calendarGrid: { flexDirection: "row", flexWrap: "wrap" }, calendarDayCell: { width: "14.285%", height: 44, alignItems: "center", justifyContent: "center" }, calendarDayCircle: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" }, calendarToday: { borderWidth: 1, borderColor: "#6D5EF7" }, calendarSelected: { backgroundColor: "#6D5EF7", borderColor: "#6D5EF7" }, calendarDayText: { color: "#30374B", fontWeight: "700", fontSize: 13 }, calendarSelectedText: { color: "white", fontWeight: "900" }, calendarTodayButton: { marginTop: 12, backgroundColor: "#EAE7FF", borderRadius: 14, paddingVertical: 12, alignItems: "center" }, calendarTodayButtonText: { color: "#5949E8", fontWeight: "900" },
   monthGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 }, monthCell: { width: "31%", backgroundColor: "white", borderRadius: 14, paddingVertical: 14, alignItems: "center", borderWidth: 1, borderColor: "#EFF0F4" }, monthCellInRange: { backgroundColor: "#EEEAFE", borderColor: "#DDD8FF" }, monthCellSelected: { backgroundColor: "#6D5EF7", borderColor: "#6D5EF7" }, monthCellText: { color: "#596074", fontWeight: "800", fontSize: 12 }, monthCellTextSelected: { color: "white" },
   periodPickerTitle: { color: "#17203A", fontSize: 22, fontWeight: "900" }, periodPickerHelp: { color: "#7E8598", fontSize: 12, marginTop: 4, marginBottom: 14 }, periodSelectionRow: { flexDirection: "row", gap: 10, marginBottom: 14 }, periodSelectionBox: { flex: 1, backgroundColor: "white", borderRadius: 14, padding: 12, borderWidth: 1, borderColor: "#E7E9F0" }, periodSelectionBoxActive: { borderColor: "#6D5EF7", backgroundColor: "#F3F1FF" }, periodSelectionLabel: { color: "#8A91A3", fontSize: 9, letterSpacing: 1, fontWeight: "900" }, periodSelectionValue: { color: "#232A3E", fontSize: 12, fontWeight: "900", marginTop: 5 }, periodApplyButton: { marginTop: 14, backgroundColor: "#6D5EF7", borderRadius: 14, paddingVertical: 13, alignItems: "center" }, periodApplyButtonText: { color: "white", fontWeight: "900" },
-  allocationHelp: { color: "#7E8598", fontSize: 12, lineHeight: 18, marginBottom: 12 }, allocationMonthButton: { backgroundColor: "white", borderRadius: 16, borderWidth: 1, borderColor: "#E7E9F0", paddingHorizontal: 15, paddingVertical: 13, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }, allocationMonthLabel: { color: "#8A91A3", fontSize: 9, letterSpacing: 0.9, fontWeight: "900" }, allocationMonthValue: { color: "#232A3E", fontSize: 16, fontWeight: "900", marginTop: 4 }, allocationSummary: { flexDirection: "row", justifyContent: "space-between", backgroundColor: "#17203A", borderRadius: 16, padding: 14, marginTop: 12 }, allocationSummaryLabel: { color: "#A9B1C7", fontSize: 9, fontWeight: "800" }, allocationSummaryValue: { color: "white", fontSize: 12, fontWeight: "900", marginTop: 4 }, allocationOver: { color: "#FF9A9A" }, allocationRow: { flexDirection: "row", alignItems: "center", backgroundColor: "white", borderRadius: 14, padding: 10, marginTop: 9, borderWidth: 1, borderColor: "#E7E9F0" }, allocationCategory: { flex: 1, color: "#30374B", fontWeight: "800", fontSize: 12 }, allocationCurrency: { color: "#8A91A3", fontSize: 11, marginRight: 5 }, allocationInput: { width: 74, backgroundColor: "#F5F6FA", borderRadius: 10, paddingHorizontal: 9, paddingVertical: 8, color: "#17203A", fontWeight: "800", textAlign: "right" }, allocationRemove: { width: 30, height: 30, alignItems: "center", justifyContent: "center", marginLeft: 5 }, allocationRemoveText: { color: "#C94C59", fontSize: 22, lineHeight: 24 }, allocationAddLabel: { color: "#8A91A3", fontSize: 9, letterSpacing: 1, fontWeight: "900", marginTop: 16, marginBottom: 8 },
+  allocationHelp: { color: "#7E8598", fontSize: 12, lineHeight: 18, marginBottom: 12 }, allocationMonthButton: { backgroundColor: "white", borderRadius: 16, borderWidth: 1, borderColor: "#E7E9F0", paddingHorizontal: 15, paddingVertical: 13, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }, allocationMonthLabel: { color: "#8A91A3", fontSize: 9, letterSpacing: 0.9, fontWeight: "900" }, allocationMonthValue: { color: "#232A3E", fontSize: 16, fontWeight: "900", marginTop: 4 }, allocationSummary: { flexDirection: "row", justifyContent: "space-between", backgroundColor: "#17203A", borderRadius: 16, padding: 14, marginTop: 12 }, allocationSummaryLabel: { color: "#A9B1C7", fontSize: 9, fontWeight: "800" }, allocationSummaryValue: { color: "white", fontSize: 12, fontWeight: "900", marginTop: 4 }, allocationOver: { color: "#FF9A9A" }, allocationRow: { flexDirection: "row", alignItems: "center", backgroundColor: "white", borderRadius: 14, padding: 10, marginTop: 9, borderWidth: 1, borderColor: "#E7E9F0" }, allocationCategory: { flex: 1, color: "#30374B", fontWeight: "800", fontSize: 12 }, allocationCurrency: { color: "#8A91A3", fontSize: 11, marginRight: 5 }, allocationInput: { width: 78, backgroundColor: "#F5F6FA", borderRadius: 10, paddingHorizontal: 9, paddingVertical: 8, color: "#17203A", fontWeight: "800", textAlign: "right", fontSize: 16 }, allocationRemove: { width: 30, height: 30, alignItems: "center", justifyContent: "center", marginLeft: 5 }, allocationRemoveText: { color: "#C94C59", fontSize: 22, lineHeight: 24 }, allocationAddLabel: { color: "#8A91A3", fontSize: 9, letterSpacing: 1, fontWeight: "900", marginTop: 16, marginBottom: 8 }, expenseAllocationSummary: { flexDirection: "row", justifyContent: "space-between", backgroundColor: "#EAE7FF", borderRadius: 12, padding: 11, marginTop: 10 }, expenseAllocationSummaryText: { color: "#5147A8", fontSize: 11, fontWeight: "900" },
   monthlyAllocationTitle: { color: "#17203A", fontSize: 26, fontWeight: "900", marginBottom: 7 }, noIncomeWarning: { color: "#9B6811", backgroundColor: "#FFF2D7", borderRadius: 14, padding: 13, textAlign: "center", fontWeight: "700", marginTop: 18 }, incomePoolHint: { color: "#496357", backgroundColor: "#E4F7F0", borderRadius: 14, padding: 14, lineHeight: 19, fontSize: 12, marginTop: 20 },
   dialogBackdrop: { flex: 1, backgroundColor: "rgba(20,25,40,0.45)", justifyContent: "center", padding: 24 }, dialog: { backgroundColor: "#F8F9FC", borderRadius: 22, padding: 20 }, dialogTitle: { fontSize: 20, fontWeight: "800", color: "#17203A", marginBottom: 12 }, dialogText: { color: "#6C7385", fontSize: 14, lineHeight: 21 }, dialogActions: { flexDirection: "row", justifyContent: "flex-end", gap: 10, marginTop: 20 }, dialogCancelButton: { paddingHorizontal: 16, paddingVertical: 11, borderRadius: 12, backgroundColor: "#EAECF3" }, dialogCancelText: { color: "#596074", fontWeight: "800" }, dialogDeleteButton: { paddingHorizontal: 16, paddingVertical: 11, borderRadius: 12, backgroundColor: "#D94E5D" }, dialogDeleteText: { color: "white", fontWeight: "900" },
   profileSafe: { flex: 1, backgroundColor: "#F6F7FB" }, profileContent: { padding: 24, paddingBottom: 50 }, profileHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" }, profileTitle: { fontSize: 28, fontWeight: "900", color: "#17203A" }, profileAvatar: { alignSelf: "center", width: 88, height: 88, borderRadius: 28, backgroundColor: "#EAE7FF", alignItems: "center", justifyContent: "center", marginTop: 34 }, profileAvatarText: { color: "#5949E8", fontSize: 28, fontWeight: "900" }, profileName: { textAlign: "center", color: "#17203A", fontSize: 22, fontWeight: "900", marginTop: 16 }, profileEmail: { textAlign: "center", color: "#7E8598", marginTop: 5 }, profileCard: { backgroundColor: "white", borderRadius: 22, padding: 20, marginTop: 30 }, profileLabel: { color: "#8A91A3", fontSize: 10, letterSpacing: 1.2, fontWeight: "800" }, profileValue: { color: "#232A3E", fontSize: 18, fontWeight: "800", marginTop: 7 }, profileDivider: { height: 1, backgroundColor: "#ECEEF3", marginVertical: 20 }, inviteCode: { color: "#6D5EF7", fontSize: 27, letterSpacing: 4, fontWeight: "900", marginTop: 8 }, profileHelp: { color: "#8A91A3", fontSize: 12, lineHeight: 18, marginTop: 12 },

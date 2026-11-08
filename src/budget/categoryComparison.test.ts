@@ -14,6 +14,16 @@ const allocations = [
   { category: "Salud", amount: 100, month: "2026-09-01" }
 ];
 
+const splitMovements: MovementForComparison[] = [{
+  amount: -300,
+  occurredAt: "2026-09-20T12:00:00-04:00",
+  category: null,
+  allocations: [
+    { category: "Alimentación", amount: 150 },
+    { category: "Salud", amount: 150 }
+  ]
+}];
+
 assert.equal(monthlyIncomeTotal(movements, "2026-09-01"), 200);
 assert.equal(monthlyIncomeTotal(movements, "2026-08-01"), 0);
 
@@ -24,5 +34,9 @@ assert.deepEqual(septemberSummary, [
   { category: "Salud", income: 100, expense: 60, balance: 40 }
 ]);
 assert.equal(septemberSummary.reduce((total, item) => total + item.expense, 0), 185);
+assert.deepEqual(summarizeMonthlyCategories(splitMovements, [], "2026-09-01"), [
+  { category: "Alimentación", income: 0, expense: 150, balance: -150 },
+  { category: "Salud", income: 0, expense: 150, balance: -150 }
+]);
 
 console.log("Category comparison tests passed");
