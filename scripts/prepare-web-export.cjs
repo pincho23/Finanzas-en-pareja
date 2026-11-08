@@ -13,6 +13,7 @@ const installMetadata = [
 
 const prepared = html
   .replace('<html lang="en">', '<html lang="es">')
+  .replace(/<meta name="viewport"[^>]*>/, '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">')
   .replace("</head>", `${installMetadata}\n</head>`);
 
 fs.writeFileSync(indexPath, prepared);
